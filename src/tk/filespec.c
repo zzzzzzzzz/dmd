@@ -25,7 +25,7 @@
 #include        <ctype.h>
 #endif
 
-#if M_UNIX || M_XENIX || linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun
+#if M_UNIX || M_XENIX || linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
 #include        <stdlib.h>
 #include        <unistd.h>
 #endif
@@ -87,7 +87,7 @@ char * filespecaddpath(const char *path,const char *filename)
 /**********************/
 char * filespecrootpath(char *filespec)
 {
-#if SUN || M_UNIX || M_XENIX || linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun
+#if SUN || M_UNIX || M_XENIX || linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
 #define DIRCHAR '/'
 #endif
 #if MSDOS || __OS2__ || __NT__ || _WIN32

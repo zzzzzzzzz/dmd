@@ -22,7 +22,7 @@
 #include        <malloc.h>
 #endif
 
-#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun
+#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
 #include        <signal.h>
 #include        <unistd.h>
 #include        <errno.h>

@@ -605,7 +605,7 @@ elem * evalu8(elem *e)
             return e;
 #endif
         esave = *e;
-#if TX86 && !__OpenBSD__
+#if TX86 && !__OpenBSD__ && !__HAIKU__
         _clear87();
 #endif
     }
@@ -1992,7 +1992,7 @@ elem * evalu8(elem *e)
 
     if (!ignore_exceptions &&
         (config.flags4 & CFG4fastfloat) == 0 &&
-#if __OpenBSD__
+#if __OpenBSD__ || __HAIKU__
         1                    // until OpenBSD supports C standard fenv.h
 #else
         _status87() & 0x3F

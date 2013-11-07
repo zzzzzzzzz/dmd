@@ -26,7 +26,7 @@
 #include <sys\stat.h>
 #endif
 
-#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun
+#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -667,7 +667,7 @@ int os_file_exists(const char *name)
     if (!find)
         return 0;
     return (find->attribute & FA_DIREC) ? 2 : 1;
-#elif linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun
+#elif linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
     struct stat buf;
 
     return stat(name,&buf) == 0;        /* file exists if stat succeeded */
@@ -744,7 +744,7 @@ char *file_8dot3name(const char *filename)
 
 int file_write(char *name, void *buffer, unsigned len)
 {
-#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun
+#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun  || __HAIKU__
     int fd;
     ssize_t numwritten;
 
@@ -820,7 +820,7 @@ err:
 
 int file_createdirs(char *name)
 {
-#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun
+#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
     return 1;
 #endif
 #if _WIN32
@@ -878,7 +878,7 @@ int os_critsecsize64()
 }
 #endif
 
-#if linux
+#if linux  || __HAIKU__ 
 int os_critsecsize32()
 {
     return 24; // sizeof(pthread_mutex_t) on 32 bit

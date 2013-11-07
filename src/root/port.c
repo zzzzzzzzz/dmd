@@ -330,7 +330,7 @@ char *Port::strupr(char *s)
 
 #endif
 
-#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__
+#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __HAIKU__
 
 #include <math.h>
 #if linux
@@ -382,7 +382,7 @@ int Port::isNan(double r)
 {
 #if __APPLE__
     return __inline_isnan(r);
-#elif __OpenBSD__
+#elif __OpenBSD__ || __HAIKU__
     return isnan(r);
 #else
     #undef isnan
@@ -394,7 +394,7 @@ int Port::isNan(longdouble r)
 {
 #if __APPLE__
     return __inline_isnan(r);
-#elif __OpenBSD__
+#elif __OpenBSD__ || __HAIKU__
     return isnan(r);
 #else
     #undef isnan
@@ -428,7 +428,7 @@ int Port::isInfinity(double r)
 {
 #if __APPLE__
     return fpclassify(r) == FP_INFINITE;
-#elif __OpenBSD__
+#elif __OpenBSD__  || __HAIKU__
     return isinf(r);
 #else
     #undef isinf

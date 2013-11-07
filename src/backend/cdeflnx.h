@@ -47,9 +47,9 @@
 //
 
 //#include "msgs2.h"
-
+#if !__HAIKU__
 char * strupr(char *);
-
+#endif
 //
 //      Attributes
 //

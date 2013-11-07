@@ -16,7 +16,7 @@
 #include <limits.h>
 #include <string.h>
 
-#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun
+#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
 #include <errno.h>
 #endif
 
@@ -509,7 +509,7 @@ int tryMain(int argc, char *argv[])
 
 #if _WIN32
     inifilename = inifile(argv[0], "sc.ini");
-#elif linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun
+#elif linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
     inifilename = inifile(argv[0], "dmd.conf");
 #else
 #error "fix this"

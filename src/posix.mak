@@ -49,7 +49,7 @@ C=backend
 TK=tk
 ROOT=root
 
-MODEL=32
+MODEL=32 
 ifneq (x,x$(MODEL))
     MODEL_FLAG=-m$(MODEL)
 endif
@@ -70,14 +70,14 @@ ifeq (OSX,$(TARGET))
     #LDFLAGS=-lstdc++ -isysroot ${SDK} -Wl,-syslibroot,${SDK} -framework CoreServices
     LDFLAGS=-lstdc++ -isysroot ${SDK} -Wl -framework CoreServices
 else
-    LDFLAGS=-lm -lstdc++ -lpthread
+    LDFLAGS=-lroot -lstdc++
 endif
 
-HOST_CC=g++
+HOST_CC=g++-x86
 CC=$(HOST_CC) $(MODEL_FLAG) $(TARGET_CFLAGS)
 
 #OPT=-g -g3
-#OPT=-O2
+OPT=-O2
 
 #COV=-fprofile-arcs -ftest-coverage
 
@@ -557,7 +557,7 @@ stringtable.o: $(ROOT)/stringtable.c
 	$(CC) -c $(GFLAGS) -I$(ROOT) $<
 
 strtold.o: $C/strtold.c
-	gcc $(MODEL_FLAG) -I$(ROOT) -c $<
+	gcc-x86 $(MODEL_FLAG) -I$(ROOT) -c $<
 
 struct.o: struct.c
 	$(CC) -c $(CFLAGS) $<

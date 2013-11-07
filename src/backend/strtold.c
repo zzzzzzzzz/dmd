@@ -20,7 +20,7 @@
 #include        <fenv.h>
 #include        <fltpnt.h>
 #endif
-#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun
+#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
 #include        <errno.h>
 #endif
 
