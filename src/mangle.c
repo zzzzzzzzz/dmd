@@ -24,11 +24,18 @@
 #include "id.h"
 #include "module.h"
 
-#if TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
+#if CPP_MANGLE
 char *cpp_mangle(Dsymbol *s);
 #endif
 
-char *mangle(Declaration *sthis)
+/******************************************************************************
+ *  isv     : for the enclosing auto functions of an inner class/struct type.
+ *            An aggregate type which defined inside auto function, it might
+ *            become Voldemort Type so its object might be returned.
+ *            This flag is necessary due to avoid mutual mangling
+ *            between return type and enclosing scope. See bugzilla 8847.
+ */
+char *mangle(Declaration *sthis, bool isv)
 {
     OutBuffer buf;
     char *id;
@@ -44,17 +51,17 @@ char *mangle(Declaration *sthis)
             FuncDeclaration *fd = s->isFuncDeclaration();
             if (s != sthis && fd)
             {
-                id = mangle(fd);
+                id = mangle(fd, isv);
                 buf.prependstring(id);
                 goto L1;
             }
             else
             {
                 id = s->ident->toChars();
-                int len = strlen(id);
+                size_t len = strlen(id);
                 char tmp[sizeof(len) * 3 + 1];
                 buf.prependstring(id);
-                sprintf(tmp, "%d", len);
+                sprintf(tmp, "%d", (int)len);
                 buf.prependstring(tmp);
             }
         }
@@ -70,7 +77,19 @@ L1:
     FuncDeclaration *fd = sthis->isFuncDeclaration();
     if (fd && (fd->needThis() || fd->isNested()))
         buf.writeByte(Type::needThisPrefix());
-    if (sthis->type->deco)
+    if (isv && fd && (fd->inferRetType || getFuncTemplateDecl(fd)))
+    {
+        TypeFunction tfn = *(TypeFunction *)sthis->type;
+        TypeFunction *tfo = (TypeFunction *)sthis->originalType;
+        tfn.purity      = tfo->purity;
+        tfn.isnothrow   = tfo->isnothrow;
+        tfn.isproperty  = tfo->isproperty;
+        tfn.isref       = fd->storage_class & STCauto ? false : tfo->isref;
+        tfn.trust       = tfo->trust;
+        tfn.next        = NULL;     // do not mangle return type
+        tfn.toDecoBuffer(&buf, 0);
+    }
+    else if (sthis->type->deco)
         buf.writestring(sthis->type->deco);
     else
     {
@@ -86,7 +105,7 @@ L1:
     return id;
 }
 
-char *Declaration::mangle()
+const char *Declaration::mangle(bool isv)
 #if __DMC__
     __out(result)
     {
@@ -131,11 +150,11 @@ char *Declaration::mangle()
                     return ident->toChars();
 
                 default:
-                    fprintf(stdmsg, "'%s', linkage = %d\n", toChars(), linkage);
+                    fprintf(stderr, "'%s', linkage = %d\n", toChars(), linkage);
                     assert(0);
             }
         }
-        char *p = ::mangle(this);
+        char *p = ::mangle(this, isv);
         OutBuffer buf;
         buf.writestring("_D");
         buf.writestring(p);
@@ -145,7 +164,7 @@ char *Declaration::mangle()
         return p;
     }
 
-char *FuncDeclaration::mangle()
+const char *FuncDeclaration::mangle(bool isv)
 #if __DMC__
     __out(result)
     {
@@ -154,6 +173,9 @@ char *FuncDeclaration::mangle()
     __body
 #endif
     {
+        if (mangleOverride)
+            return mangleOverride; 
+    
         if (isMain())
             return (char *)"_Dmain";
 
@@ -161,24 +183,54 @@ char *FuncDeclaration::mangle()
             return ident->toChars();
 
         assert(this);
+        return Declaration::mangle(isv);
+    }
+
+const char *VarDeclaration::mangle(bool isv)
+#if __DMC__
+    __out(result)
+    {
+        assert(strlen(result) > 0);
+    }
+    __body
+#endif
+    {
+        if (mangleOverride)
+            return mangleOverride;
+
         return Declaration::mangle();
     }
 
-char *StructDeclaration::mangle()
-{
-    //printf("StructDeclaration::mangle() '%s'\n", toChars());
-    return Dsymbol::mangle();
-}
-
-
-char *TypedefDeclaration::mangle()
+const char *TypedefDeclaration::mangle(bool isv)
 {
     //printf("TypedefDeclaration::mangle() '%s'\n", toChars());
-    return Dsymbol::mangle();
+    return Dsymbol::mangle(isv);
 }
 
 
-char *ClassDeclaration::mangle()
+const char *AggregateDeclaration::mangle(bool isv)
+{
+#if 1
+    //printf("AggregateDeclaration::mangle() '%s'\n", toChars());
+    if (Dsymbol *p = toParent2())
+    {   if (FuncDeclaration *fd = p->isFuncDeclaration())
+        {   // This might be the Voldemort Type
+            const char *id = Dsymbol::mangle(fd->inferRetType || getFuncTemplateDecl(fd));
+            //printf("isv ad %s, %s\n", toChars(), id);
+            return id;
+        }
+    }
+#endif
+    return Dsymbol::mangle(isv);
+}
+
+const char *StructDeclaration::mangle(bool isv)
+{
+    //printf("StructDeclaration::mangle() '%s'\n", toChars());
+    return AggregateDeclaration::mangle(isv);
+}
+
+const char *ClassDeclaration::mangle(bool isv)
 {
     Dsymbol *parentsave = parent;
 
@@ -204,13 +256,13 @@ char *ClassDeclaration::mangle()
        )
         parent = NULL;
 
-    char *id = Dsymbol::mangle();
+    const char *id = AggregateDeclaration::mangle(isv);
     parent = parentsave;
     return id;
 }
 
 
-char *TemplateInstance::mangle()
+const char *TemplateInstance::mangle(bool isv)
 {
     OutBuffer buf;
 
@@ -220,15 +272,15 @@ char *TemplateInstance::mangle()
         printf("  parent = %s %s", parent->kind(), parent->toChars());
     printf("\n");
 #endif
-    char *id = ident ? ident->toChars() : toChars();
+    const char *id = ident ? ident->toChars() : toChars();
     if (!tempdecl)
         error("is not defined");
     else
     {
-        Dsymbol *par = isnested || isTemplateMixin() ? parent : tempdecl->parent;
+        Dsymbol *par = enclosing || isTemplateMixin() ? parent : tempdecl->parent;
         if (par)
         {
-            char *p = par->mangle();
+            const char *p = par->mangle();
             if (p[0] == '_' && p[1] == 'D')
                 p += 2;
             buf.writestring(p);
@@ -243,7 +295,7 @@ char *TemplateInstance::mangle()
 
 
 
-char *Dsymbol::mangle()
+const char *Dsymbol::mangle(bool isv)
 {
     OutBuffer buf;
     char *id;
@@ -257,7 +309,7 @@ char *Dsymbol::mangle()
     id = ident ? ident->toChars() : toChars();
     if (parent)
     {
-        char *p = parent->mangle();
+        const char *p = parent->mangle(isv);
         if (p[0] == '_' && p[1] == 'D')
             p += 2;
         buf.writestring(p);

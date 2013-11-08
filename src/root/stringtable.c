@@ -1,5 +1,5 @@
 
-// Copyright (c) 1999-2011 by Digital Mars
+// Copyright (c) 1999-2013 by Digital Mars
 // All Rights Reserved
 // written by Walter Bright
 // http://www.digitalmars.com
@@ -36,30 +36,18 @@ hash_t calcHash(const char *str, size_t len)
 
             case 2:
                 hash *= 37;
-#if LITTLE_ENDIAN
                 hash += *(const uint16_t *)str;
-#else
-                hash += str[0] * 256 + str[1];
-#endif
                 return hash;
 
             case 3:
                 hash *= 37;
-#if LITTLE_ENDIAN
                 hash += (*(const uint16_t *)str << 8) +
                         ((const uint8_t *)str)[2];
-#else
-                hash += (str[0] * 256 + str[1]) * 256 + str[2];
-#endif
                 return hash;
 
             default:
                 hash *= 37;
-#if LITTLE_ENDIAN
                 hash += *(const uint32_t *)str;
-#else
-                hash += ((str[0] * 256 + str[1]) * 256 + str[2]) * 256 + str[3];
-#endif
                 str += 4;
                 len -= 4;
                 break;
@@ -67,14 +55,14 @@ hash_t calcHash(const char *str, size_t len)
     }
 }
 
-void StringValue::ctor(const char *p, unsigned length)
+void StringValue::ctor(const char *p, size_t length)
 {
     this->length = length;
     this->lstring[length] = 0;
     memcpy(this->lstring, p, length * sizeof(char));
 }
 
-void StringTable::init(unsigned size)
+void StringTable::_init(size_t size)
 {
     table = (void **)mem.calloc(size, sizeof(void *));
     tabledim = size;
@@ -83,11 +71,9 @@ void StringTable::init(unsigned size)
 
 StringTable::~StringTable()
 {
-    unsigned i;
-
     // Zero out dangling pointers to help garbage collector.
     // Should zero out StringEntry's too.
-    for (i = 0; i < count; i++)
+    for (size_t i = 0; i < count; i++)
         table[i] = NULL;
 
     mem.free(table);
@@ -102,10 +88,10 @@ struct StringEntry
 
     StringValue value;
 
-    static StringEntry *alloc(const char *s, unsigned len);
+    static StringEntry *alloc(const char *s, size_t len);
 };
 
-StringEntry *StringEntry::alloc(const char *s, unsigned len)
+StringEntry *StringEntry::alloc(const char *s, size_t len)
 {
     StringEntry *se;
 
@@ -115,7 +101,7 @@ StringEntry *StringEntry::alloc(const char *s, unsigned len)
     return se;
 }
 
-void **StringTable::search(const char *s, unsigned len)
+void **StringTable::search(const char *s, size_t len)
 {
     hash_t hash;
     unsigned u;
@@ -149,7 +135,7 @@ void **StringTable::search(const char *s, unsigned len)
     return (void **)se;
 }
 
-StringValue *StringTable::lookup(const char *s, unsigned len)
+StringValue *StringTable::lookup(const char *s, size_t len)
 {   StringEntry *se;
 
     se = *(StringEntry **)search(s,len);
@@ -159,7 +145,7 @@ StringValue *StringTable::lookup(const char *s, unsigned len)
         return NULL;
 }
 
-StringValue *StringTable::update(const char *s, unsigned len)
+StringValue *StringTable::update(const char *s, size_t len)
 {   StringEntry **pse;
     StringEntry *se;
 
@@ -173,7 +159,7 @@ StringValue *StringTable::update(const char *s, unsigned len)
     return &se->value;
 }
 
-StringValue *StringTable::insert(const char *s, unsigned len)
+StringValue *StringTable::insert(const char *s, size_t len)
 {   StringEntry **pse;
     StringEntry *se;
 

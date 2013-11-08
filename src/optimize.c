@@ -23,13 +23,10 @@
 #include "declaration.h"
 #include "aggregate.h"
 #include "init.h"
-
+#include "enum.h"
 
 #ifdef IN_GCC
 #include "d-gcc-real.h"
-
-/* %% fix? */
-extern "C" bool real_isnan (const real_t *);
 #endif
 
 static real_t zero;     // work around DMC bug for now
@@ -71,7 +68,7 @@ Expression *expandVar(int result, VarDeclaration *v)
                         v->error("recursive initialization of constant");
                     goto L1;
                 }
-                Expression *ei = v->init->toExpression();
+                Expression *ei = v->getConstInitializer();
                 if (!ei)
                 {   if (v->storage_class & STCmanifest)
                         v->error("enum cannot be initialized with %s", v->init->toChars());
@@ -94,24 +91,20 @@ Expression *expandVar(int result, VarDeclaration *v)
                     }
                     else if (ei->implicitConvTo(v->type) >= MATCHconst)
                     {   // const var initialized with non-const expression
-                        ei = ei->implicitCastTo(0, v->type);
-                        ei = ei->semantic(0);
+                        ei = ei->implicitCastTo(NULL, v->type);
+                        ei = ei->semantic(NULL);
                     }
                     else
                         goto L1;
                 }
-                if (v->scope)
+                else if (!(result & WANTinterpret) &&
+                         !(v->storage_class & STCmanifest) &&
+                         ei->isConst() != 1 && ei->op != TOKstring &&
+                         ei->op != TOKaddress)
                 {
-                    v->inuse++;
-                    e = ei->syntaxCopy();
-                    e = e->semantic(v->scope);
-                    e = e->implicitCastTo(v->scope, v->type);
-                    // enabling this line causes test22 in test suite to fail
-                    //ei->type = e->type;
-                    v->scope = NULL;
-                    v->inuse--;
+                    goto L1;
                 }
-                else if (!ei->type)
+                if (!ei->type)
                 {
                     goto L1;
                 }
@@ -180,6 +173,8 @@ Expression *fromConstInitializer(int result, Expression *e1)
                 !(v->storage_class & STCtemplateparameter))
             {
                 e1->error("variable %s cannot be read at compile time", v->toChars());
+                e = e->copy();
+                e->type = Type::terror;
             }
         }
     }
@@ -187,29 +182,37 @@ Expression *fromConstInitializer(int result, Expression *e1)
 }
 
 
-Expression *Expression::optimize(int result)
+Expression *Expression::optimize(int result, bool keepLvalue)
 {
     //printf("Expression::optimize(result = x%x) %s\n", result, toChars());
     return this;
 }
 
-Expression *VarExp::optimize(int result)
+Expression *VarExp::optimize(int result, bool keepLvalue)
 {
+    if (keepLvalue)
+    {
+        VarDeclaration *v = var->isVarDeclaration();
+        if (v && !(v->storage_class & STCmanifest))
+            return this;
+    }
     return fromConstInitializer(result, this);
 }
 
-Expression *TupleExp::optimize(int result)
+Expression *TupleExp::optimize(int result, bool keepLvalue)
 {
+    if (e0)
+        e0 = e0->optimize(WANTvalue | (result & WANTinterpret));
     for (size_t i = 0; i < exps->dim; i++)
-    {   Expression *e = (*exps)[i];
-
+    {
+        Expression *e = (*exps)[i];
         e = e->optimize(WANTvalue | (result & WANTinterpret));
         (*exps)[i] = e;
     }
     return this;
 }
 
-Expression *ArrayLiteralExp::optimize(int result)
+Expression *ArrayLiteralExp::optimize(int result, bool keepLvalue)
 {
     if (elements)
     {
@@ -223,7 +226,7 @@ Expression *ArrayLiteralExp::optimize(int result)
     return this;
 }
 
-Expression *AssocArrayLiteralExp::optimize(int result)
+Expression *AssocArrayLiteralExp::optimize(int result, bool keepLvalue)
 {
     assert(keys->dim == values->dim);
     for (size_t i = 0; i < keys->dim; i++)
@@ -239,8 +242,11 @@ Expression *AssocArrayLiteralExp::optimize(int result)
     return this;
 }
 
-Expression *StructLiteralExp::optimize(int result)
+Expression *StructLiteralExp::optimize(int result, bool keepLvalue)
 {
+    if(stageflags & stageOptimize) return this;
+    int old = stageflags;
+    stageflags |= stageOptimize;
     if (elements)
     {
         for (size_t i = 0; i < elements->dim; i++)
@@ -251,22 +257,23 @@ Expression *StructLiteralExp::optimize(int result)
             (*elements)[i] = e;
         }
     }
+    stageflags = old;
     return this;
 }
 
-Expression *TypeExp::optimize(int result)
+Expression *TypeExp::optimize(int result, bool keepLvalue)
 {
     return this;
 }
 
-Expression *UnaExp::optimize(int result)
+Expression *UnaExp::optimize(int result, bool keepLvalue)
 {
     //printf("UnaExp::optimize() %s\n", toChars());
     e1 = e1->optimize(result);
     return this;
 }
 
-Expression *NegExp::optimize(int result)
+Expression *NegExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(result);
@@ -279,7 +286,7 @@ Expression *NegExp::optimize(int result)
     return e;
 }
 
-Expression *ComExp::optimize(int result)
+Expression *ComExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(result);
@@ -292,7 +299,7 @@ Expression *ComExp::optimize(int result)
     return e;
 }
 
-Expression *NotExp::optimize(int result)
+Expression *NotExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(result);
@@ -305,7 +312,7 @@ Expression *NotExp::optimize(int result)
     return e;
 }
 
-Expression *BoolExp::optimize(int result)
+Expression *BoolExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(result);
@@ -318,7 +325,15 @@ Expression *BoolExp::optimize(int result)
     return e;
 }
 
-Expression *AddrExp::optimize(int result)
+Expression *SymOffExp::optimize(int result, bool keepLvalue)
+{
+    assert(var);
+    if ((result & WANTinterpret) && var->isThreadlocal())
+            error("cannot take address of thread-local variable %s at compile time", var->toChars());
+    return this;
+}
+
+Expression *AddrExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("AddrExp::optimize(result = %d) %s\n", result, toChars());
@@ -334,13 +349,8 @@ Expression *AddrExp::optimize(int result)
         return e->optimize(result);
     }
 
-    if (e1->op == TOKvar)
-    {   VarExp *ve = (VarExp *)e1;
-        if (ve->var->storage_class & STCmanifest)
-            e1 = e1->optimize(result);
-    }
-    else
-        e1 = e1->optimize(result);
+    // Keep lvalue-ness
+    e1 = e1->optimize(result, true);
 
     // Convert &*ex to ex
     if (e1->op == TOKstar)
@@ -378,7 +388,7 @@ Expression *AddrExp::optimize(int result)
                 && !ve->var->isImportedSymbol())
             {
                 TypeSArray *ts = (TypeSArray *)ve->type;
-                dinteger_t dim = ts->dim->toInteger();
+                sinteger_t dim = ts->dim->toInteger();
                 if (index < 0 || index >= dim)
                     error("array index %lld is out of bounds [0..%lld]", index, dim);
                 e = new SymOffExp(loc, ve->var, index * ts->nextOf()->size());
@@ -390,7 +400,7 @@ Expression *AddrExp::optimize(int result)
     return this;
 }
 
-Expression *PtrExp::optimize(int result)
+Expression *PtrExp::optimize(int result, bool keepLvalue)
 {
     //printf("PtrExp::optimize(result = x%x) %s\n", result, toChars());
     e1 = e1->optimize(result);
@@ -409,6 +419,9 @@ Expression *PtrExp::optimize(int result)
         }
         return e;
     }
+    if (keepLvalue)
+        return this;
+
     // Constant fold *(&structliteral + offset)
     if (e1->op == TOKadd)
     {
@@ -432,10 +445,12 @@ Expression *PtrExp::optimize(int result)
     return this;
 }
 
-Expression *DotVarExp::optimize(int result)
+Expression *DotVarExp::optimize(int result, bool keepLvalue)
 {
     //printf("DotVarExp::optimize(result = x%x) %s\n", result, toChars());
     e1 = e1->optimize(result);
+    if (keepLvalue)
+        return this;
 
     Expression *e = e1;
 
@@ -459,7 +474,7 @@ Expression *DotVarExp::optimize(int result)
     return this;
 }
 
-Expression *NewExp::optimize(int result)
+Expression *NewExp::optimize(int result, bool keepLvalue)
 {
     if (thisexp)
         thisexp = thisexp->optimize(WANTvalue);
@@ -486,28 +501,44 @@ Expression *NewExp::optimize(int result)
     }
     if (result & WANTinterpret)
     {
-        error("cannot evaluate %s at compile time", toChars());
+        Expression *eresult = interpret(NULL);
+        if (eresult == EXP_CANT_INTERPRET)
+            return this;
+        if (eresult && eresult != EXP_VOID_INTERPRET)
+            return eresult;
+        else
+            error("cannot evaluate %s at compile time", toChars());
     }
     return this;
 }
 
-Expression *CallExp::optimize(int result)
+Expression *CallExp::optimize(int result, bool keepLvalue)
 {
     //printf("CallExp::optimize(result = %d) %s\n", result, toChars());
     Expression *e = this;
 
-    // Optimize parameters
+    // Optimize parameters with keeping lvalue-ness
     if (arguments)
     {
+        Type *t1 = e1->type->toBasetype();
+        if (t1->ty == Tdelegate) t1 = t1->nextOf();
+        assert(t1->ty == Tfunction);
+        TypeFunction *tf = (TypeFunction *)t1;
+        size_t pdim = Parameter::dim(tf->parameters) - (tf->varargs == 2 ? 1 : 0);
         for (size_t i = 0; i < arguments->dim; i++)
-        {   Expression *e = (*arguments)[i];
-
-            e = e->optimize(WANTvalue);
+        {
+            Parameter *p = Parameter::getNth(tf->parameters, i);
+            bool keepLvalue = (p ? (p->storageClass & (STCref | STCout)) != 0 : false);
+            Expression *e = (*arguments)[i];
+            e = e->optimize(WANTvalue, keepLvalue);
             (*arguments)[i] = e;
         }
     }
 
     e1 = e1->optimize(result);
+    if (keepLvalue)
+        return this;
+
 #if 1
     if (result & WANTinterpret)
     {
@@ -559,7 +590,7 @@ Expression *CallExp::optimize(int result)
 }
 
 
-Expression *CastExp::optimize(int result)
+Expression *CastExp::optimize(int result, bool keepLvalue)
 {
     //printf("CastExp::optimize(result = %d) %s\n", result, toChars());
     //printf("from %s to %s\n", type->toChars(), to->toChars());
@@ -586,7 +617,7 @@ Expression *CastExp::optimize(int result)
 
     if ((e1->op == TOKstring || e1->op == TOKarrayliteral) &&
         (type->ty == Tpointer || type->ty == Tarray) &&
-        e1->type->nextOf()->size() == type->nextOf()->size()
+        e1->type->toBasetype()->nextOf()->size() == type->nextOf()->size()
        )
     {
         Expression *e = e1->castTo(NULL, type);
@@ -597,9 +628,8 @@ Expression *CastExp::optimize(int result)
     if (e1->op == TOKstructliteral &&
         e1->type->implicitConvTo(type) >= MATCHconst)
     {
-        e1->type = type;
         if (X) printf(" returning2 %s\n", e1->toChars());
-        return e1;
+        goto L1;
     }
 
     /* The first test here is to prevent infinite loops
@@ -609,9 +639,8 @@ Expression *CastExp::optimize(int result)
     if (e1->op == TOKnull &&
         (type->ty == Tpointer || type->ty == Tclass || type->ty == Tarray))
     {
-        e1->type = type;
         if (X) printf(" returning3 %s\n", e1->toChars());
-        return e1;
+        goto L1;
     }
 
     if (result & WANTflags && type->ty == Tclass && e1->type->ty == Tclass)
@@ -625,18 +654,16 @@ Expression *CastExp::optimize(int result)
         cdto   = type->isClassHandle();
         if (cdto->isBaseOf(cdfrom, &offset) && offset == 0)
         {
-            e1->type = type;
             if (X) printf(" returning4 %s\n", e1->toChars());
-            return e1;
+            goto L1;
         }
     }
 
     // We can convert 'head const' to mutable
     if (to->mutableOf()->constOf()->equals(e1->type->mutableOf()->constOf()))
     {
-        e1->type = type;
         if (X) printf(" returning5 %s\n", e1->toChars());
-        return e1;
+        goto L1;
     }
 
     Expression *e;
@@ -648,8 +675,7 @@ Expression *CastExp::optimize(int result)
             if (type->size() == e1->type->size() &&
                 type->toBasetype()->ty != Tsarray)
             {
-                e1->type = type;
-                return e1;
+                goto L1;
             }
             return this;
         }
@@ -662,10 +688,14 @@ Expression *CastExp::optimize(int result)
         e = this;
     if (X) printf(" returning6 %s\n", e->toChars());
     return e;
+L1: // Returning e1 with changing its type
+    e = (e1old == e1 ? e1->copy() : e1);
+    e->type = type;
+    return e;
 #undef X
 }
 
-Expression *BinExp::optimize(int result)
+Expression *BinExp::optimize(int result, bool keepLvalue)
 {
     //printf("BinExp::optimize(result = %d) %s\n", result, toChars());
     if (op != TOKconstruct && op != TOKblit)    // don't replace const variable with its initializer
@@ -675,7 +705,7 @@ Expression *BinExp::optimize(int result)
     {
         if (e2->isConst() == 1)
         {
-            dinteger_t i2 = e2->toInteger();
+            sinteger_t i2 = e2->toInteger();
             d_uns64 sz = e1->type->size() * 8;
             if (i2 < 0 || i2 >= sz)
             {   error("shift assign by %lld is outside the range 0..%llu", i2, (ulonglong)sz - 1);
@@ -686,7 +716,7 @@ Expression *BinExp::optimize(int result)
     return this;
 }
 
-Expression *AddExp::optimize(int result)
+Expression *AddExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("AddExp::optimize(%s)\n", toChars());
@@ -703,7 +733,7 @@ Expression *AddExp::optimize(int result)
     return e;
 }
 
-Expression *MinExp::optimize(int result)
+Expression *MinExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(result);
@@ -719,7 +749,7 @@ Expression *MinExp::optimize(int result)
     return e;
 }
 
-Expression *MulExp::optimize(int result)
+Expression *MulExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("MulExp::optimize(result = %d) %s\n", result, toChars());
@@ -734,7 +764,7 @@ Expression *MulExp::optimize(int result)
     return e;
 }
 
-Expression *DivExp::optimize(int result)
+Expression *DivExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("DivExp::optimize(%s)\n", toChars());
@@ -749,7 +779,7 @@ Expression *DivExp::optimize(int result)
     return e;
 }
 
-Expression *ModExp::optimize(int result)
+Expression *ModExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(result);
@@ -770,7 +800,7 @@ Expression *shift_optimize(int result, BinExp *e, Expression *(*shift)(Type *, E
     e->e2 = e->e2->optimize(result);
     if (e->e2->isConst() == 1)
     {
-        dinteger_t i2 = e->e2->toInteger();
+        sinteger_t i2 = e->e2->toInteger();
         d_uns64 sz = e->e1->type->size() * 8;
         if (i2 < 0 || i2 >= sz)
         {   e->error("shift by %lld is outside the range 0..%llu", i2, (ulonglong)sz - 1);
@@ -782,25 +812,25 @@ Expression *shift_optimize(int result, BinExp *e, Expression *(*shift)(Type *, E
     return ex;
 }
 
-Expression *ShlExp::optimize(int result)
+Expression *ShlExp::optimize(int result, bool keepLvalue)
 {
     //printf("ShlExp::optimize(result = %d) %s\n", result, toChars());
-    return shift_optimize(result, this, Shl);
+    return shift_optimize(result, this, &Shl);
 }
 
-Expression *ShrExp::optimize(int result)
+Expression *ShrExp::optimize(int result, bool keepLvalue)
 {
     //printf("ShrExp::optimize(result = %d) %s\n", result, toChars());
-    return shift_optimize(result, this, Shr);
+    return shift_optimize(result, this, &Shr);
 }
 
-Expression *UshrExp::optimize(int result)
+Expression *UshrExp::optimize(int result, bool keepLvalue)
 {
     //printf("UshrExp::optimize(result = %d) %s\n", result, toChars());
-    return shift_optimize(result, this, Ushr);
+    return shift_optimize(result, this, &Ushr);
 }
 
-Expression *AndExp::optimize(int result)
+Expression *AndExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(result);
@@ -812,7 +842,7 @@ Expression *AndExp::optimize(int result)
     return e;
 }
 
-Expression *OrExp::optimize(int result)
+Expression *OrExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(result);
@@ -824,7 +854,7 @@ Expression *OrExp::optimize(int result)
     return e;
 }
 
-Expression *XorExp::optimize(int result)
+Expression *XorExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(result);
@@ -836,7 +866,7 @@ Expression *XorExp::optimize(int result)
     return e;
 }
 
-Expression *PowExp::optimize(int result)
+Expression *PowExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(result);
@@ -901,7 +931,7 @@ Expression *PowExp::optimize(int result)
     return e;
 }
 
-Expression *CommaExp::optimize(int result)
+Expression *CommaExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("CommaExp::optimize(result = %d) %s\n", result, toChars());
@@ -919,7 +949,7 @@ Expression *CommaExp::optimize(int result)
     }
 
     e1 = e1->optimize(result & WANTinterpret);
-    e2 = e2->optimize(result);
+    e2 = e2->optimize(result, keepLvalue);
     if (!e1 || e1->op == TOKint64 || e1->op == TOKfloat64 || !e1->hasSideEffect())
     {
         e = e2;
@@ -932,7 +962,7 @@ Expression *CommaExp::optimize(int result)
     return e;
 }
 
-Expression *ArrayLengthExp::optimize(int result)
+Expression *ArrayLengthExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("ArrayLengthExp::optimize(result = %d) %s\n", result, toChars());
@@ -945,24 +975,22 @@ Expression *ArrayLengthExp::optimize(int result)
     return e;
 }
 
-Expression *EqualExp::optimize(int result)
-{   Expression *e;
-
+Expression *EqualExp::optimize(int result, bool keepLvalue)
+{
     //printf("EqualExp::optimize(result = %x) %s\n", result, toChars());
     e1 = e1->optimize(WANTvalue | (result & WANTinterpret));
     e2 = e2->optimize(WANTvalue | (result & WANTinterpret));
-    e = this;
 
     Expression *e1 = fromConstInitializer(result, this->e1);
     Expression *e2 = fromConstInitializer(result, this->e2);
 
-    e = Equal(op, type, e1, e2);
+    Expression *e = Equal(op, type, e1, e2);
     if (e == EXP_CANT_INTERPRET)
         e = this;
     return e;
 }
 
-Expression *IdentityExp::optimize(int result)
+Expression *IdentityExp::optimize(int result, bool keepLvalue)
 {
     //printf("IdentityExp::optimize(result = %d) %s\n", result, toChars());
     e1 = e1->optimize(WANTvalue | (result & WANTinterpret));
@@ -970,7 +998,8 @@ Expression *IdentityExp::optimize(int result)
     Expression *e = this;
 
     if ((this->e1->isConst()     && this->e2->isConst()) ||
-        (this->e1->op == TOKnull && this->e2->op == TOKnull))
+        (this->e1->op == TOKnull && this->e2->op == TOKnull) ||
+        (result & WANTinterpret))
     {
         e = Identity(op, type, this->e1, this->e2);
         if (e == EXP_CANT_INTERPRET)
@@ -995,42 +1024,41 @@ void setLengthVarIfKnown(VarDeclaration *lengthVar, Expression *arr)
     else if (arr->op == TOKarrayliteral)
         len = ((ArrayLiteralExp *)arr)->elements->dim;
     else
-        return; // we don't know the length yet
+    {
+        Type *t = arr->type->toBasetype();
+        if (t->ty == Tsarray)
+            len = ((TypeSArray *)t)->dim->toInteger();
+        else
+            return; // we don't know the length yet
+    }
 
-    Expression *dollar = new IntegerExp(0, len, Type::tsize_t);
-    lengthVar->init = new ExpInitializer(0, dollar);
+    Expression *dollar = new IntegerExp(Loc(), len, Type::tsize_t);
+    lengthVar->init = new ExpInitializer(Loc(), dollar);
     lengthVar->storage_class |= STCstatic | STCconst;
 }
 
 
-Expression *IndexExp::optimize(int result)
+Expression *IndexExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("IndexExp::optimize(result = %d) %s\n", result, toChars());
-    Expression *e1 = this->e1->optimize(
-        WANTvalue | (result & (WANTinterpret| WANTexpand)));
-    e1 = fromConstInitializer(result, e1);
-    if (this->e1->op == TOKvar)
-    {   VarExp *ve = (VarExp *)this->e1;
-        if (ve->var->storage_class & STCmanifest)
-        {   /* We generally don't want to have more than one copy of an
-             * array literal, but if it's an enum we have to because the
-             * enum isn't stored elsewhere. See Bugzilla 2559
-             */
-            this->e1 = e1;
-        }
-    }
+    e1 = e1->optimize(WANTvalue | (result & (WANTinterpret| WANTexpand)));
+
+    Expression *ex = fromConstInitializer(result, e1);
+
     // We might know $ now
-    setLengthVarIfKnown(lengthVar, e1);
+    setLengthVarIfKnown(lengthVar, ex);
     e2 = e2->optimize(WANTvalue | (result & WANTinterpret));
-    e = Index(type, e1, e2);
+    if (keepLvalue)
+        return this;
+    e = Index(type, ex, e2);
     if (e == EXP_CANT_INTERPRET)
         e = this;
     return e;
 }
 
 
-Expression *SliceExp::optimize(int result)
+Expression *SliceExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("SliceExp::optimize(result = %d) %s\n", result, toChars());
@@ -1057,7 +1085,7 @@ Expression *SliceExp::optimize(int result)
     return e;
 }
 
-Expression *AndAndExp::optimize(int result)
+Expression *AndAndExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("AndAndExp::optimize(%d) %s\n", result, toChars());
@@ -1097,7 +1125,7 @@ Expression *AndAndExp::optimize(int result)
     return e;
 }
 
-Expression *OrOrExp::optimize(int result)
+Expression *OrOrExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     e1 = e1->optimize(WANTflags | (result & WANTinterpret));
@@ -1133,7 +1161,7 @@ Expression *OrOrExp::optimize(int result)
     return e;
 }
 
-Expression *CmpExp::optimize(int result)
+Expression *CmpExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("CmpExp::optimize() %s\n", toChars());
@@ -1149,7 +1177,7 @@ Expression *CmpExp::optimize(int result)
     return e;
 }
 
-Expression *CatExp::optimize(int result)
+Expression *CatExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     //printf("CatExp::optimize(%d) %s\n", result, toChars());
@@ -1162,17 +1190,17 @@ Expression *CatExp::optimize(int result)
 }
 
 
-Expression *CondExp::optimize(int result)
+Expression *CondExp::optimize(int result, bool keepLvalue)
 {   Expression *e;
 
     econd = econd->optimize(WANTflags | (result & WANTinterpret));
     if (econd->isBool(TRUE))
-        e = e1->optimize(result);
+        e = e1->optimize(result, keepLvalue);
     else if (econd->isBool(FALSE))
-        e = e2->optimize(result);
+        e = e2->optimize(result, keepLvalue);
     else
-    {   e1 = e1->optimize(result);
-        e2 = e2->optimize(result);
+    {   e1 = e1->optimize(result, keepLvalue);
+        e2 = e2->optimize(result, keepLvalue);
         e = this;
     }
     return e;

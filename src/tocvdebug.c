@@ -23,6 +23,7 @@
 #include "template.h"
 
 #include "rmem.h"
+#include "target.h"
 #include "cc.h"
 #include "global.h"
 #include "oper.h"
@@ -68,23 +69,16 @@ unsigned PROTtoATTR(enum PROT prot)
 }
 
 unsigned cv4_memfunctypidx(FuncDeclaration *fd)
-{   type *t;
-    debtyp_t *d;
-    unsigned char *p;
-    AggregateDeclaration *ad;
-
+{
     //printf("cv4_memfunctypidx(fd = '%s')\n", fd->toChars());
-    t = fd->type->toCtype();
-    ad = fd->isMember2();
+
+    type *t = fd->type->toCtype();
+    AggregateDeclaration *ad = fd->isMember2();
     if (ad)
     {
-        unsigned nparam;
-        idx_t paramidx;
-        idx_t thisidx;
-        unsigned char call;
-
         // It's a member function, which gets a special type record
 
+        idx_t thisidx;
         if (fd->isStatic())
             thisidx = dttab4[TYvoid];
         else
@@ -93,21 +87,47 @@ unsigned cv4_memfunctypidx(FuncDeclaration *fd)
             thisidx = cv4_typidx(ad->handle->toCtype());
         }
 
-        paramidx = cv4_arglist(t,&nparam);
-        call = cv4_callconv(t);
+        unsigned nparam;
+        idx_t paramidx = cv4_arglist(t,&nparam);
 
-        d = debtyp_alloc(18);
-        p = d->data;
-        TOWORD(p,LF_MFUNCTION);
-        TOWORD(p + 2,cv4_typidx(t->Tnext));
-        TOWORD(p + 4,cv4_typidx(ad->type->toCtype()));
-        TOWORD(p + 6,thisidx);
-        p[8] = call;
-        p[9] = 0;                               // reserved
-        TOWORD(p + 10,nparam);
-        TOWORD(p + 12,paramidx);
-        TOLONG(p + 14,0);                       // thisadjust
+        unsigned char call = cv4_callconv(t);
 
+        debtyp_t *d;
+        switch (config.fulltypes)
+        {
+            case CV4:
+            {
+                d = debtyp_alloc(18);
+                unsigned char *p = d->data;
+                TOWORD(p,LF_MFUNCTION);
+                TOWORD(p + 2,cv4_typidx(t->Tnext));
+                TOWORD(p + 4,cv4_typidx(ad->type->toCtype()));
+                TOWORD(p + 6,thisidx);
+                p[8] = call;
+                p[9] = 0;                               // reserved
+                TOWORD(p + 10,nparam);
+                TOWORD(p + 12,paramidx);
+                TOLONG(p + 14,0);                       // thisadjust
+                break;
+            }
+            case CV8:
+            {
+                d = debtyp_alloc(26);
+                unsigned char *p = d->data;
+                TOWORD(p,0x1009);
+                TOLONG(p + 2,cv4_typidx(t->Tnext));
+                TOLONG(p + 6,cv4_typidx(ad->type->toCtype()));
+                TOLONG(p + 10,thisidx);
+                p[14] = call;
+                p[15] = 0;                               // reserved
+                TOWORD(p + 16,nparam);
+                TOLONG(p + 18,paramidx);
+                TOLONG(p + 22,0);                       // thisadjust
+                break;
+            }
+            default:
+                assert(0);
+        }
         return cv_debtyp(d);
     }
     return cv4_typidx(t);
@@ -115,52 +135,34 @@ unsigned cv4_memfunctypidx(FuncDeclaration *fd)
 
 unsigned cv4_Denum(EnumDeclaration *e)
 {
-    debtyp_t *d,*dt;
-    unsigned nfields,fnamelen;
-    unsigned len;
-    unsigned property;
-    unsigned attribute;
-    const char *id;
-    idx_t typidx;
-
     //dbg_printf("cv4_Denum(%s)\n", e->toChars());
-    property = 0;
-    if (!e->members || !e->memtype)
-        property |= 0x80;               // enum is forward referenced
-
-    id = e->toPrettyChars();
-    len = 10;
-    d = debtyp_alloc(len + cv_stringbytes(id));
-    TOWORD(d->data,LF_ENUM);
-    TOWORD(d->data + 4,e->memtype ? cv4_typidx(e->memtype->toCtype()) : 0);
-    TOWORD(d->data + 8,property);
-    len += cv_namestring(d->data + len,id);
-
-    d->length = 0;                      // so cv_debtyp() will allocate new
-    typidx = cv_debtyp(d);
-    d->length = len;                    // restore length
+    unsigned property = 0;
+        if (!e->members || !e->memtype || !e->memtype->isintegral())
+        property |= 0x80;               // enum is forward referenced or non-integer
 
     // Compute the number of fields, and the length of the fieldlist record
-    nfields = 0;
-    fnamelen = 2;
+    unsigned nfields = 0;
+    unsigned fnamelen = 2;
     if (!property)
     {
         for (size_t i = 0; i < e->members->dim; i++)
         {   EnumMember *sf = (*e->members)[i]->isEnumMember();
-            dinteger_t value;
-
             if (sf)
             {
-                value = sf->value->toInteger();
+                dinteger_t value = sf->value->toInteger();
                 unsigned fnamelen1 = fnamelen;
+
                 // store only member's simple name
                 fnamelen += 4 + cv4_numericbytes(value) + cv_stringbytes(sf->toChars());
 
-                /* Optlink dies on longer ones, so just truncate
-                 */
-                if (fnamelen > 0xB000)          // 0xB000 found by trial and error
-                {   fnamelen = fnamelen1;       // back up
-                    break;                      // and skip the rest
+                if (config.fulltypes != CV8)
+                {
+                    /* Optlink dies on longer ones, so just truncate
+                     */
+                    if (fnamelen > 0xB000)          // 0xB000 found by trial and error
+                    {   fnamelen = fnamelen1;       // back up
+                        break;                      // and skip the rest
+                    }
                 }
 
                 nfields++;
@@ -168,53 +170,110 @@ unsigned cv4_Denum(EnumDeclaration *e)
         }
     }
 
+    const char *id = e->toPrettyChars();
+    unsigned len;
+    debtyp_t *d;
+    unsigned memtype = e->memtype ? cv4_typidx(e->memtype->toCtype()) : 0;
+    switch (config.fulltypes)
+    {
+        case CV8:
+            len = 14;
+            d = debtyp_alloc(len + cv_stringbytes(id));
+            TOWORD(d->data,LF_ENUM_V3);
+            TOLONG(d->data + 6,memtype);
+            TOWORD(d->data + 4,property);
+            len += cv_namestring(d->data + len,id);
+            break;
+
+        case CV4:
+            len = 10;
+            d = debtyp_alloc(len + cv_stringbytes(id));
+            TOWORD(d->data,LF_ENUM);
+            TOWORD(d->data + 4,memtype);
+            TOWORD(d->data + 8,property);
+            len += cv_namestring(d->data + len,id);
+            break;
+
+        default:
+            assert(0);
+    }
+    unsigned length_save = d->length;
+    d->length = 0;                      // so cv_debtyp() will allocate new
+    idx_t typidx = cv_debtyp(d);
+    d->length = length_save;            // restore length
+
     TOWORD(d->data + 2,nfields);
 
-    // If forward reference, then field list is 0
-    if (property)
+    unsigned fieldlist = 0;
+    if (!property)                      // if forward reference, then fieldlist is 0
     {
-        TOWORD(d->data + 6,0);
-        return typidx;
-    }
+        // Generate fieldlist type record
+        debtyp_t *dt = debtyp_alloc(fnamelen);
+        TOWORD(dt->data,(config.fulltypes == CV8) ? LF_FIELDLIST_V2 : LF_FIELDLIST);
 
-    // Generate fieldlist type record
-    dt = debtyp_alloc(fnamelen);
-    TOWORD(dt->data,LF_FIELDLIST);
+        // And fill it in
+        unsigned j = 2;
+        unsigned fieldi = 0;
+        for (size_t i = 0; i < e->members->dim; i++)
+        {   EnumMember *sf = (*e->members)[i]->isEnumMember();
 
-    // And fill it in
-    unsigned j = 2;
-    unsigned fieldi = 0;
-    for (size_t i = 0; i < e->members->dim; i++)
-    {   EnumMember *sf = (*e->members)[i]->isEnumMember();
-        dinteger_t value;
+            if (sf)
+            {
+                fieldi++;
+                if (fieldi > nfields)
+                    break;                  // chop off the rest
 
-        if (sf)
-        {
-            fieldi++;
-            if (fieldi > nfields)
-                break;                  // chop off the rest
+                dinteger_t value = sf->value->toInteger();
+                TOWORD(dt->data + j,(config.fulltypes == CV8) ? LF_ENUMERATE_V3 : LF_ENUMERATE);
+                unsigned attribute = 0;
+                TOWORD(dt->data + j + 2,attribute);
+                cv4_storenumeric(dt->data + j + 4,value);
+                j += 4 + cv4_numericbytes(value);
+                // store only member's simple name
+                j += cv_namestring(dt->data + j, sf->toChars());
 
-            value = sf->value->toInteger();
-            TOWORD(dt->data + j,LF_ENUMERATE);
-            attribute = 0;
-            TOWORD(dt->data + j + 2,attribute);
-            cv4_storenumeric(dt->data + j + 4,value);
-            j += 4 + cv4_numericbytes(value);
-            // store only member's simple name
-            j += cv_namestring(dt->data + j, sf->toChars());
-
-            // If enum is not a member of a class, output enum members as constants
-//          if (!isclassmember(s))
-//          {
-//              cv4_outsym(sf);
-//          }
+                // If enum is not a member of a class, output enum members as constants
+    //          if (!isclassmember(s))
+    //          {
+    //              cv4_outsym(sf);
+    //          }
+            }
         }
+        assert(j == fnamelen);
+        fieldlist = cv_debtyp(dt);
     }
-    assert(j == fnamelen);
-    TOWORD(d->data + 6,cv_debtyp(dt));
+
+    if (config.fulltypes == CV8)
+        TOLONG(d->data + 10,fieldlist);
+    else
+        TOWORD(d->data + 6,fieldlist);
 
 //    cv4_outsym(s);
     return typidx;
+}
+
+/*************************************
+ * Align and pad.
+ * Returns:
+ *      aligned count
+ */
+unsigned cv_align(unsigned char *p, unsigned n)
+{
+    if (config.fulltypes == CV8)
+    {
+        if (p)
+        {
+            unsigned npad = -n & 3;
+            while (npad)
+            {
+                *p = 0xF0 + npad;
+                ++p;
+                --npad;
+            }
+        }
+        n = (n + 3) & ~3;
+    }
+    return n;
 }
 
 /* ==================================================================== */
@@ -227,9 +286,6 @@ void TypedefDeclaration::toDebug()
 {
     //printf("TypedefDeclaration::toDebug('%s')\n", toChars());
 
-    if (I64 && config.fulltypes == CVNONE)
-        return;
-
     assert(config.fulltypes >= CV4);
 
     // If it is a member, it is handled by cvMember()
@@ -238,21 +294,25 @@ void TypedefDeclaration::toDebug()
         if (basetype->ty == Ttuple)
             return;
 
-        unsigned length;
         const char *id = toPrettyChars();
         idx_t typidx = cv4_typidx(basetype->toCtype());
-        unsigned len = strlen(id);
-        unsigned char *debsym = (unsigned char *) alloca(39 + IDOHD + len);
+        if (config.fulltypes == CV8)
+            cv8_udt(id, typidx);
+        else
+        {
+            unsigned len = strlen(id);
+            unsigned char *debsym = (unsigned char *) alloca(39 + IDOHD + len);
 
-        // Output a 'user-defined type' for the tag name
-        TOWORD(debsym + 2,S_UDT);
-        TOIDX(debsym + 4,typidx);
-        length = 2 + 2 + cgcv.sz_idx;
-        length += cv_namestring(debsym + length,id);
-        TOWORD(debsym,length - 2);
+            // Output a 'user-defined type' for the tag name
+            TOWORD(debsym + 2,S_UDT);
+            TOIDX(debsym + 4,typidx);
+            unsigned length = 2 + 2 + cgcv.sz_idx;
+            length += cv_namestring(debsym + length,id);
+            TOWORD(debsym,length - 2);
 
-        assert(length <= 40 + len);
-        objmod->write_bytes(SegData[DEBSYM],length,debsym);
+            assert(length <= 40 + len);
+            objmod->write_bytes(SegData[DEBSYM],length,debsym);
+        }
     }
 }
 
@@ -261,29 +321,30 @@ void EnumDeclaration::toDebug()
 {
     //printf("EnumDeclaration::toDebug('%s')\n", toChars());
 
-    if (I64 && config.fulltypes == CVNONE)
-        return;
-
     assert(config.fulltypes >= CV4);
 
     // If it is a member, it is handled by cvMember()
     if (!isMember())
     {
-        unsigned length;
         const char *id = toPrettyChars();
         idx_t typidx = cv4_Denum(this);
-        unsigned len = strlen(id);
-        unsigned char *debsym = (unsigned char *) alloca(39 + IDOHD + len);
+        if (config.fulltypes == CV8)
+            cv8_udt(id, typidx);
+        else
+        {
+            unsigned len = strlen(id);
+            unsigned char *debsym = (unsigned char *) alloca(39 + IDOHD + len);
 
-        // Output a 'user-defined type' for the tag name
-        TOWORD(debsym + 2,S_UDT);
-        TOIDX(debsym + 4,typidx);
-        length = 2 + 2 + cgcv.sz_idx;
-        length += cv_namestring(debsym + length,id);
-        TOWORD(debsym,length - 2);
+            // Output a 'user-defined type' for the tag name
+            TOWORD(debsym + 2,S_UDT);
+            TOIDX(debsym + 4,typidx);
+            unsigned length = 2 + 2 + cgcv.sz_idx;
+            length += cv_namestring(debsym + length,id);
+            TOWORD(debsym,length - 2);
 
-        assert(length <= 40 + len);
-        objmod->write_bytes(SegData[DEBSYM],length,debsym);
+            assert(length <= 40 + len);
+            objmod->write_bytes(SegData[DEBSYM],length,debsym);
+        }
     }
 }
 
@@ -318,23 +379,9 @@ int cv_mem_p(Dsymbol *s, void *param)
 
 void StructDeclaration::toDebug()
 {
-    unsigned leaf;
-    unsigned property;
-    unsigned nfields;
-    unsigned fnamelen;
-    const char *id;
-    targ_size_t size;
-    unsigned numidx;
-    debtyp_t *d,*dt;
-    unsigned len;
-    int count;                  // COUNT field in LF_CLASS
-    unsigned char *p;
     idx_t typidx = 0;
 
     //printf("StructDeclaration::toDebug('%s')\n", toChars());
-
-    if (I64 && config.fulltypes == CVNONE)
-        return;
 
     assert(config.fulltypes >= CV4);
     if (isAnonymous())
@@ -343,7 +390,8 @@ void StructDeclaration::toDebug()
     if (typidx)                 // if reference already generated
         return /*typidx*/;      // use already existing reference
 
-    property = 0;
+    targ_size_t size;
+    unsigned property = 0;
     if (!members)
     {   size = 0;
         property |= 0x80;               // forward reference
@@ -362,32 +410,59 @@ void StructDeclaration::toDebug()
 //    if (st->Sopeq && !(st->Sopeq->Sfunc->Fflags & Fnodebug))
 //      property |= 0x20;               // class has overloaded assignment
 
-    id = toPrettyChars();
-    numidx = isUnionDeclaration() ? 8 : 12;
-    len = numidx + cv4_numericbytes(size);
-    d = debtyp_alloc(len + cv_stringbytes(id));
+    const char *id = toPrettyChars();
+
+    unsigned leaf = isUnionDeclaration() ? LF_UNION : LF_STRUCTURE;
+    if (config.fulltypes == CV8)
+        leaf = leaf == LF_UNION ? LF_UNION_V3 : LF_STRUCTURE_V3;
+
+    unsigned numidx;
+    switch (leaf)
+    {
+        case LF_UNION:        numidx = 8;       break;
+        case LF_UNION_V3:     numidx = 10;      break;
+        case LF_STRUCTURE:    numidx = 12;      break;
+        case LF_STRUCTURE_V3: numidx = 18;      break;
+    }
+
+    unsigned len = numidx + cv4_numericbytes(size);
+    debtyp_t *d = debtyp_alloc(len + cv_stringbytes(id));
     cv4_storenumeric(d->data + numidx,size);
     len += cv_namestring(d->data + len,id);
 
-    leaf = isUnionDeclaration() ? LF_UNION : LF_STRUCTURE;
-    if (!isUnionDeclaration())
+    if (leaf == LF_STRUCTURE)
     {
         TOWORD(d->data + 8,0);          // dList
         TOWORD(d->data + 10,0);         // vshape is 0 (no virtual functions)
+    }
+    else if (leaf == LF_STRUCTURE_V3)
+    {
+        TOLONG(d->data + 10,0);         // dList
+        TOLONG(d->data + 14,0);         // vshape is 0 (no virtual functions)
     }
     TOWORD(d->data,leaf);
 
     // Assign a number to prevent infinite recursion if a struct member
     // references the same struct.
+    unsigned length_save = d->length;
     d->length = 0;                      // so cv_debtyp() will allocate new
     typidx = cv_debtyp(d);
-    d->length = len;            // restore length
+    d->length = length_save;            // restore length
 
     if (!members)                       // if reference only
     {
-        TOWORD(d->data + 2,0);          // count: number of fields is 0
-        TOWORD(d->data + 4,0);          // field list is 0
-        TOWORD(d->data + 6,property);
+        if (config.fulltypes == CV8)
+        {
+            TOWORD(d->data + 2,0);          // count: number of fields is 0
+            TOLONG(d->data + 6,0);          // field list is 0
+            TOWORD(d->data + 4,property);
+        }
+        else
+        {
+            TOWORD(d->data + 2,0);          // count: number of fields is 0
+            TOWORD(d->data + 4,0);          // field list is 0
+            TOWORD(d->data + 6,property);
+        }
         return /*typidx*/;
     }
 
@@ -399,19 +474,17 @@ void StructDeclaration::toDebug()
     {   Dsymbol *s = (*members)[i];
         s->apply(&cv_mem_count, &mc);
     }
-    nfields = mc.nfields;
-    fnamelen = mc.fnamelen;
+    unsigned nfields = mc.nfields;
+    unsigned fnamelen = mc.fnamelen;
 
-    count = nfields;
-    TOWORD(d->data + 2,count);
-    TOWORD(d->data + 6,property);
+    int count = nfields;                  // COUNT field in LF_CLASS
 
     // Generate fieldlist type record
-    dt = debtyp_alloc(fnamelen);
-    p = dt->data;
+    debtyp_t *dt = debtyp_alloc(fnamelen);
+    unsigned char *p = dt->data;
 
     // And fill it in
-    TOWORD(p,LF_FIELDLIST);
+    TOWORD(p,config.fulltypes == CV8 ? LF_FIELDLIST_V2 : LF_FIELDLIST);
     p += 2;
     for (size_t i = 0; i < members->dim; i++)
     {   Dsymbol *s = (*members)[i];
@@ -420,25 +493,39 @@ void StructDeclaration::toDebug()
 
     //dbg_printf("fnamelen = %d, p-dt->data = %d\n",fnamelen,p-dt->data);
     assert(p - dt->data == fnamelen);
-    TOWORD(d->data + 4,cv_debtyp(dt));
+    idx_t fieldlist = cv_debtyp(dt);
+
+    TOWORD(d->data + 2,count);
+    if (config.fulltypes == CV8)
+    {
+        TOWORD(d->data + 4,property);
+        TOLONG(d->data + 6,fieldlist);
+    }
+    else
+    {
+        TOWORD(d->data + 4,fieldlist);
+        TOWORD(d->data + 6,property);
+    }
 
 //    cv4_outsym(s);
 
-    unsigned char *debsym;
-    unsigned length;
+    if (config.fulltypes == CV8)
+        cv8_udt(id, typidx);
+    else
+    {
+        size_t idlen = strlen(id);
+        unsigned char *debsym = (unsigned char *) alloca(39 + IDOHD + idlen);
 
-    len = strlen(id);
-    debsym = (unsigned char *) alloca(39 + IDOHD + len);
+        // Output a 'user-defined type' for the tag name
+        TOWORD(debsym + 2,S_UDT);
+        TOIDX(debsym + 4,typidx);
+        unsigned length = 2 + 2 + cgcv.sz_idx;
+        length += cv_namestring(debsym + length,id);
+        TOWORD(debsym,length - 2);
 
-    // Output a 'user-defined type' for the tag name
-    TOWORD(debsym + 2,S_UDT);
-    TOIDX(debsym + 4,typidx);
-    length = 2 + 2 + cgcv.sz_idx;
-    length += cv_namestring(debsym + length,id);
-    TOWORD(debsym,length - 2);
-
-    assert(length <= 40 + len);
-    objmod->write_bytes(SegData[DEBSYM],length,debsym);
+        assert(length <= 40 + idlen);
+        objmod->write_bytes(SegData[DEBSYM],length,debsym);
+    }
 
 //    return typidx;
 }
@@ -446,24 +533,9 @@ void StructDeclaration::toDebug()
 
 void ClassDeclaration::toDebug()
 {
-    unsigned leaf;
-    unsigned property;
-    unsigned nfields;
-    unsigned fnamelen;
-    const char *id;
-    targ_size_t size;
-    unsigned numidx;
-    debtyp_t *d,*dt;
-    unsigned len;
-    int i;
-    int count;                  // COUNT field in LF_CLASS
-    unsigned char *p;
     idx_t typidx = 0;
 
     //printf("ClassDeclaration::toDebug('%s')\n", toChars());
-
-    if (I64 && config.fulltypes == CVNONE)
-        return;
 
     assert(config.fulltypes >= CV4);
     if (isAnonymous())
@@ -472,7 +544,8 @@ void ClassDeclaration::toDebug()
     if (typidx)                 // if reference already generated
         return /*typidx*/;      // use already existing reference
 
-    property = 0;
+    targ_size_t size;
+    unsigned property = 0;
     if (!members)
     {   size = 0;
         property |= 0x80;               // forward reference
@@ -491,33 +564,31 @@ void ClassDeclaration::toDebug()
 //    if (st->Sopeq && !(st->Sopeq->Sfunc->Fflags & Fnodebug))
 //      property |= 0x20;               // class has overloaded assignment
 
-    id = isCPPinterface() ? ident->toChars() : toPrettyChars();
-    numidx = isUnionDeclaration() ? 8 : 12;
-    len = numidx + cv4_numericbytes(size);
-    d = debtyp_alloc(len + cv_stringbytes(id));
+#if DMDV1
+    const char *id = toPrettyChars();
+#else
+    const char *id = isCPPinterface() ? ident->toChars() : toPrettyChars();
+#endif
+    unsigned leaf = config.fulltypes == CV8 ? LF_CLASS_V3 : LF_CLASS;
+
+    unsigned numidx = (leaf == LF_CLASS_V3) ? 18 : 12;
+    unsigned len = numidx + cv4_numericbytes(size);
+    debtyp_t *d = debtyp_alloc(len + cv_stringbytes(id));
     cv4_storenumeric(d->data + numidx,size);
     len += cv_namestring(d->data + len,id);
 
-    leaf = LF_CLASS;
-    TOWORD(d->data + 8,0);              // dList
-
+    idx_t vshapeidx = 0;
     if (1)
-    {   debtyp_t *vshape;
-        unsigned char descriptor;
-
+    {
         size_t n = vtbl.dim;                   // number of virtual functions
-        if (n == 0)
-        {
-            TOWORD(d->data + 10,0);             // vshape is 0
-        }
-        else
-        {
-            vshape = debtyp_alloc(4 + (n + 1) / 2);
+        if (n)
+        {   // 4 bits per descriptor
+            debtyp_t *vshape = debtyp_alloc(4 + (n + 1) / 2);
             TOWORD(vshape->data,LF_VTSHAPE);
-            TOWORD(vshape->data + 2,1);
+            TOWORD(vshape->data + 2,n);
 
             n = 0;
-            descriptor = 0;
+            unsigned char descriptor = 0;
             for (size_t i = 0; i < vtbl.dim; i++)
             {   FuncDeclaration *fd = (FuncDeclaration *)vtbl[i];
 
@@ -527,25 +598,42 @@ void ClassDeclaration::toDebug()
                 descriptor <<= 4;
                 n++;
             }
-            TOWORD(d->data + 10,cv_debtyp(vshape));     // vshape
+            vshapeidx = cv_debtyp(vshape);
         }
     }
-    else
-        TOWORD(d->data + 10,0);         // vshape is 0 (no virtual functions)
-
+    if (leaf == LF_CLASS)
+    {
+        TOWORD(d->data + 8,0);          // dList
+        TOWORD(d->data + 10,vshapeidx);
+    }
+    else if (leaf == LF_CLASS_V3)
+    {
+        TOLONG(d->data + 10,0);         // dList
+        TOLONG(d->data + 14,vshapeidx);
+    }
     TOWORD(d->data,leaf);
 
     // Assign a number to prevent infinite recursion if a struct member
     // references the same struct.
+    unsigned length_save = d->length;
     d->length = 0;                      // so cv_debtyp() will allocate new
     typidx = cv_debtyp(d);
-    d->length = len;            // restore length
+    d->length = length_save;            // restore length
 
     if (!members)                       // if reference only
     {
-        TOWORD(d->data + 2,0);          // count: number of fields is 0
-        TOWORD(d->data + 4,0);          // field list is 0
-        TOWORD(d->data + 6,property);
+        if (leaf == LF_CLASS_V3)
+        {
+            TOWORD(d->data + 2,0);          // count: number of fields is 0
+            TOLONG(d->data + 6,0);          // field list is 0
+            TOWORD(d->data + 4,property);
+        }
+        else
+        {
+            TOWORD(d->data + 2,0);          // count: number of fields is 0
+            TOWORD(d->data + 4,0);          // field list is 0
+            TOWORD(d->data + 6,property);
+        }
         return /*typidx*/;
     }
 
@@ -553,49 +641,76 @@ void ClassDeclaration::toDebug()
     CvMemberCount mc;
     mc.nfields = 0;
     mc.fnamelen = 2;
-    // Add in base classes
-    for (size_t i = 0; i < baseclasses->dim; i++)
-    {   BaseClass *bc = (*baseclasses)[i];
 
-        mc.nfields++;
-        mc.fnamelen += 6 + cv4_numericbytes(bc->offset);
+    /* Adding in the base classes causes VS 2010 debugger to refuse to display any
+     * of the fields. I have not been able to determine why.
+     * (Could it be because the base class is "forward referenced"?)
+     * It does work with VS 2012.
+     */
+    bool addInBaseClasses = true;
+    if (addInBaseClasses)
+    {
+        // Add in base classes
+        for (size_t i = 0; i < baseclasses->dim; i++)
+        {   BaseClass *bc = (*baseclasses)[i];
+
+            mc.nfields++;
+            unsigned elementlen = 4 + cgcv.sz_idx + cv4_numericbytes(bc->offset);
+            elementlen = cv_align(NULL, elementlen);
+            mc.fnamelen += elementlen;
+        }
     }
+
     for (size_t i = 0; i < members->dim; i++)
     {   Dsymbol *s = (*members)[i];
         s->apply(&cv_mem_count, &mc);
     }
-    nfields = mc.nfields;
-    fnamelen = mc.fnamelen;
+    unsigned nfields = mc.nfields;
+    unsigned fnamelen = mc.fnamelen;
 
-    count = nfields;
+    int count = nfields;
     TOWORD(d->data + 2,count);
-    TOWORD(d->data + 6,property);
 
     // Generate fieldlist type record
-    dt = debtyp_alloc(fnamelen);
-    p = dt->data;
+    debtyp_t *dt = debtyp_alloc(fnamelen);
+    unsigned char *p = dt->data;
 
     // And fill it in
-    TOWORD(p,LF_FIELDLIST);
+    TOWORD(p,config.fulltypes == CV8 ? LF_FIELDLIST_V2 : LF_FIELDLIST);
     p += 2;
 
-    // Add in base classes
-    for (size_t i = 0; i < baseclasses->dim; i++)
-    {   BaseClass *bc = (*baseclasses)[i];
-        idx_t typidx;
-        unsigned attribute;
+    if (addInBaseClasses)
+    {
+        // Add in base classes
+        for (size_t i = 0; i < baseclasses->dim; i++)
+        {   BaseClass *bc = (*baseclasses)[i];
 
-        typidx = cv4_typidx(bc->base->type->toCtype()->Tnext);
+            idx_t typidx = cv4_typidx(bc->base->type->toCtype()->Tnext);
+            unsigned attribute = PROTtoATTR(bc->protection);
 
-        attribute = PROTtoATTR(bc->protection);
+            unsigned elementlen;
+            switch (config.fulltypes)
+            {
+                case CV8:
+                    TOWORD(p, LF_BCLASS_V2);
+                    TOWORD(p + 2,attribute);
+                    TOLONG(p + 4,typidx);
+                    elementlen = 8;
+                    break;
 
-        TOWORD(p,LF_BCLASS);
-        TOWORD(p + 2,typidx);
-        TOWORD(p + 4,attribute);
-        p += 6;
+                case CV4:
+                    TOWORD(p, LF_BCLASS);
+                    TOWORD(p + 2,typidx);
+                    TOWORD(p + 4,attribute);
+                    elementlen = 6;
+                    break;
+            }
 
-        cv4_storenumeric(p, bc->offset);
-        p += cv4_numericbytes(bc->offset);
+            cv4_storenumeric(p + elementlen, bc->offset);
+            elementlen += cv4_numericbytes(bc->offset);
+            elementlen = cv_align(p + elementlen, elementlen);
+            p += elementlen;
+        }
     }
 
     for (size_t i = 0; i < members->dim; i++)
@@ -605,25 +720,39 @@ void ClassDeclaration::toDebug()
 
     //dbg_printf("fnamelen = %d, p-dt->data = %d\n",fnamelen,p-dt->data);
     assert(p - dt->data == fnamelen);
-    TOWORD(d->data + 4,cv_debtyp(dt));
+    idx_t fieldlist = cv_debtyp(dt);
+
+    TOWORD(d->data + 2,count);
+    if (config.fulltypes == CV8)
+    {
+        TOWORD(d->data + 4,property);
+        TOLONG(d->data + 6,fieldlist);
+    }
+    else
+    {
+        TOWORD(d->data + 4,fieldlist);
+        TOWORD(d->data + 6,property);
+    }
 
 //    cv4_outsym(s);
 
-    unsigned char *debsym;
-    unsigned length;
+    if (config.fulltypes == CV8)
+        cv8_udt(id, typidx);
+    else
+    {
+        size_t idlen = strlen(id);
+        unsigned char *debsym = (unsigned char *) alloca(39 + IDOHD + idlen);
 
-    len = strlen(id);
-    debsym = (unsigned char *) alloca(39 + IDOHD + len);
+        // Output a 'user-defined type' for the tag name
+        TOWORD(debsym + 2,S_UDT);
+        TOIDX(debsym + 4,typidx);
+        unsigned length = 2 + 2 + cgcv.sz_idx;
+        length += cv_namestring(debsym + length,id);
+        TOWORD(debsym,length - 2);
 
-    // Output a 'user-defined type' for the tag name
-    TOWORD(debsym + 2,S_UDT);
-    TOIDX(debsym + 4,typidx);
-    length = 2 + 2 + cgcv.sz_idx;
-    length += cv_namestring(debsym + length,id);
-    TOWORD(debsym,length - 2);
-
-    assert(length <= 40 + len);
-    objmod->write_bytes(SegData[DEBSYM],length,debsym);
+        assert(length <= 40 + idlen);
+        objmod->write_bytes(SegData[DEBSYM],length,debsym);
+    }
 
 //    return typidx;
 }
@@ -642,82 +771,90 @@ int Dsymbol::cvMember(unsigned char *p)
     return 0;
 }
 
+int cvMember(unsigned char *p, char *id, idx_t typidx)
+{
+    int nwritten = 0;
+    if (!p)
+        nwritten = cv_stringbytes(id);
+
+    switch (config.fulltypes)
+    {
+        case CV8:
+            if (!p)
+            {
+                nwritten += 8;
+                nwritten = cv_align(NULL, nwritten);
+            }
+            else
+            {
+                TOWORD(p,LF_NESTTYPE_V3);
+                TOWORD(p + 2,0);
+                TOLONG(p + 4,typidx);
+                nwritten = 8 + cv_namestring(p + 8, id);
+                nwritten = cv_align(p + nwritten, nwritten);
+            }
+            break;
+
+        case CV4:
+            if (!p)
+            {
+                nwritten += 4;
+            }
+            else
+            {
+                TOWORD(p,LF_NESTTYPE);
+                TOWORD(p + 2,typidx);
+                nwritten = 4 + cv_namestring(p + 4, id);
+            }
+            break;
+
+        default:
+            assert(0);
+    }
+#ifdef DEBUG
+    if (p)
+        assert(nwritten == cvMember(NULL, id, typidx));
+#endif
+    return nwritten;
+}
 
 int TypedefDeclaration::cvMember(unsigned char *p)
 {
-    char *id;
-    idx_t typidx;
-    int nwritten = 0;
-
     //printf("TypedefDeclaration::cvMember() '%s'\n", toChars());
-    id = toChars();
 
-    if (!p)
-    {
-        nwritten = 4 + cv_stringbytes(id);
-    }
-    else
-    {
-        TOWORD(p,LF_NESTTYPE);
-        typidx = cv4_typidx(basetype->toCtype());
-        TOWORD(p + 2,typidx);
-        nwritten = 4 + cv_namestring(p + 4, id);
-    }
-    return nwritten;
+    return ::cvMember(p, toChars(), cv4_typidx(basetype->toCtype()));
 }
 
 
 int EnumDeclaration::cvMember(unsigned char *p)
 {
-    char *id;
-    idx_t typidx;
-    int nwritten = 0;
-
     //printf("EnumDeclaration::cvMember() '%s'\n", toChars());
-    id = toChars();
 
-    if (!p)
-    {
-        nwritten = 4 + cv_stringbytes(id);
-    }
-    else
-    {
-        TOWORD(p,LF_NESTTYPE);
-        typidx = cv4_Denum(this);
-        TOWORD(p + 2,typidx);
-        nwritten = 4 + cv_namestring(p + 4, id);
-    }
-    return nwritten;
+    return ::cvMember(p, toChars(), cv4_Denum(this));
 }
 
 
 int FuncDeclaration::cvMember(unsigned char *p)
 {
-    char *id;
-    idx_t typidx;
-    unsigned attribute;
     int nwritten = 0;
-    debtyp_t *d;
 
     //printf("FuncDeclaration::cvMember() '%s'\n", toChars());
 
     if (!type)                  // if not compiled in,
         return 0;               // skip it
 
-    id = toChars();
+    char *id = toChars();
 
     if (!p)
     {
-        nwritten = 6 + cv_stringbytes(id);
+        nwritten = 2 + 2 + cgcv.sz_idx + cv_stringbytes(id);
+        nwritten = cv_align(NULL, nwritten);
+        return nwritten;
     }
     else
     {
-        int count;
-        int mlen;
-        unsigned char *q;
-
-        count = 0;
-        mlen = 2;
+        int count = 0;
+        int mlen = 2;
         {
             if (introducing)
                 mlen += 4;
@@ -726,13 +863,13 @@ int FuncDeclaration::cvMember(unsigned char *p)
         }
 
         // Allocate and fill it in
-        d = debtyp_alloc(mlen);
-        q = d->data;
-        TOWORD(q,LF_METHODLIST);
+        debtyp_t *d = debtyp_alloc(mlen);
+        unsigned char *q = d->data;
+        TOWORD(q,config.fulltypes == CV8 ? LF_METHODLIST_V2 : LF_METHODLIST);
         q += 2;
 //      for (s = sf; s; s = s->Sfunc->Foversym)
         {
-            attribute = PROTtoATTR(prot());
+            unsigned attribute = PROTtoATTR(prot());
 
             /* 0*4 vanilla method
              * 1*4 virtual method
@@ -771,31 +908,44 @@ int FuncDeclaration::cvMember(unsigned char *p)
             TOIDX(q, cv4_memfunctypidx(this));
             q += cgcv.sz_idx;
             if (introducing)
-            {   TOLONG(q, vtblIndex * PTRSIZE);
+            {   TOLONG(q, vtblIndex * Target::ptrsize);
                 q += 4;
             }
         }
         assert(q - d->data == mlen);
 
-        typidx = cv_debtyp(d);
+        idx_t typidx = cv_debtyp(d);
         if (typidx)
         {
-            TOWORD(p,LF_METHOD);
-            TOWORD(p + 2,count);
-            nwritten = 4;
-            TOIDX(p + nwritten, typidx);
-            nwritten += cgcv.sz_idx;
-            nwritten += cv_namestring(p + nwritten, id);
+            switch (config.fulltypes)
+            {
+                case CV8:
+                    TOWORD(p,LF_METHOD_V3);
+                    goto Lmethod;
+                case CV4:
+                    TOWORD(p,LF_METHOD);
+                Lmethod:
+                    TOWORD(p + 2,count);
+                    nwritten = 4;
+                    TOIDX(p + nwritten, typidx);
+                    nwritten += cgcv.sz_idx;
+                    nwritten += cv_namestring(p + nwritten, id);
+                    break;
+
+                default:
+                    assert(0);
+            }
         }
+        nwritten = cv_align(p + nwritten, nwritten);
+#ifdef DEBUG
+        assert(nwritten == cvMember(NULL));
+#endif
     }
     return nwritten;
 }
 
 int VarDeclaration::cvMember(unsigned char *p)
 {
-    char *id;
-    idx_t typidx;
-    unsigned attribute;
     int nwritten = 0;
 
     //printf("VarDeclaration::cvMember(p = %p) '%s'\n", p, toChars());
@@ -803,41 +953,80 @@ int VarDeclaration::cvMember(unsigned char *p)
     if (type->toBasetype()->ty == Ttuple)
         return 0;
 
-    id = toChars();
+    char *id = toChars();
 
     if (!p)
     {
-        if (storage_class & STCfield)
+        if (isField())
         {
-            nwritten += 6 +
-                    cv4_numericbytes(offset) + cv_stringbytes(id);
+            if (config.fulltypes == CV8)
+                nwritten += 2;
+            nwritten += 6 + cv_stringbytes(id);
+            nwritten += cv4_numericbytes(offset);
         }
         else if (isStatic())
         {
+            if (config.fulltypes == CV8)
+                nwritten += 2;
             nwritten += 6 + cv_stringbytes(id);
         }
+        nwritten = cv_align(NULL, nwritten);
     }
-    else if (storage_class & STCfield)
+    else
     {
-        TOWORD(p,LF_MEMBER);
-        typidx = cv_typidx(type->toCtype());
-        attribute = PROTtoATTR(prot());
+        idx_t typidx = cv_typidx(type->toCtype());
+        unsigned attribute = PROTtoATTR(prot());
         assert((attribute & ~3) == 0);
-        TOWORD(p + 2,typidx);
-        TOWORD(p + 4,attribute);
-        cv4_storenumeric(p + 6, offset);
-        nwritten = 6 + cv4_numericbytes( offset);
-        nwritten += cv_namestring(p + nwritten, id);
-    }
-    else if (isStatic())
-    {
-        TOWORD(p,LF_STMEMBER);
-        typidx = cv_typidx(type->toCtype());
-        attribute = PROTtoATTR(prot());
-        assert((attribute & ~3) == 0);
-        TOWORD(p + 2,typidx);
-        TOWORD(p + 4,attribute);
-        nwritten = 6 + cv_namestring(p + 6, id);
+        switch (config.fulltypes)
+        {
+            case CV8:
+                if (isField())
+                {
+                    TOWORD(p,LF_MEMBER_V3);
+                    TOWORD(p + 2,attribute);
+                    TOLONG(p + 4,typidx);
+                    cv4_storenumeric(p + 8, offset);
+                    nwritten = 8 + cv4_numericbytes( offset);
+                    nwritten += cv_namestring(p + nwritten, id);
+                }
+                else if (isStatic())
+                {
+                    TOWORD(p,LF_STMEMBER_V3);
+                    TOWORD(p + 2,attribute);
+                    TOLONG(p + 4,typidx);
+                    nwritten = 8;
+                    nwritten += cv_namestring(p + nwritten, id);
+                }
+                break;
+
+            case CV4:
+                if (isField())
+                {
+                    TOWORD(p,LF_MEMBER);
+                    TOWORD(p + 2,typidx);
+                    TOWORD(p + 4,attribute);
+                    cv4_storenumeric(p + 6, offset);
+                    nwritten = 6 + cv4_numericbytes( offset);
+                    nwritten += cv_namestring(p + nwritten, id);
+                }
+                else if (isStatic())
+                {
+                    TOWORD(p,LF_STMEMBER);
+                    TOWORD(p + 2,typidx);
+                    TOWORD(p + 4,attribute);
+                    nwritten = 6;
+                    nwritten += cv_namestring(p + nwritten, id);
+                }
+                break;
+
+             default:
+                assert(0);
+        }
+
+        nwritten = cv_align(p + nwritten, nwritten);
+#ifdef DEBUG
+        assert(nwritten == cvMember(NULL));
+#endif
     }
     return nwritten;
 }

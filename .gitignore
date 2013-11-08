@@ -18,7 +18,26 @@ test/test_results
 src/idgen.exe
 src/dmd.exe
 src/impcnvgen.exe
+src/optabgen.exe
+src/verstr.h
 *.map
 .DS_Store
 trace.def
 trace.log
+
+# Visual Studio files
+*.exe
+*.pdb
+src/vcbuild/Win32
+src/vcbuild/x64
+*.ncb
+*.suo
+*.sdf
+*.opensdf
+*.user
+ipch
+
+# Xcode files
+DerivedData/
+xcuserdata/
+dmd.xcodeproj/project.xcworkspace/xcuserdata

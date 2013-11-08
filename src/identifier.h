@@ -21,7 +21,7 @@ struct Identifier : Object
 {
     int value;
     const char *string;
-    unsigned len;
+    size_t len;
 
     Identifier(const char *string, int value);
     int equals(Object *o);
@@ -29,7 +29,6 @@ struct Identifier : Object
     int compare(Object *o);
     void print();
     char *toChars();
-    char *toHChars();
     const char *toHChars2();
     int dyncast();
 

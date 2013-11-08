@@ -14,6 +14,35 @@ template T5996(T)
 static assert(!is(typeof(T5996!(int).bug5996())));
 
 /**************************************************
+    8532    segfault(mtype.c) - type inference + pure
+**************************************************/
+auto segfault8532(Y, R ...)(R r, Y val) pure
+{ return segfault8532(r, val); }
+
+static assert(!is(typeof( segfault8532(1,2,3))));
+
+/**************************************************
+    8982    ICE(ctfeexpr.c) __parameters with error in default value
+**************************************************/
+template ice8982(T)
+{
+    void bug8982(ref const int v = 7){}
+
+    static if (is(typeof(bug8982) P == __parameters)) {
+        pragma(msg, ((P[0..1] g) => g[0])());
+    }
+}
+
+static assert(!is(ice8982!(int)));
+
+
+/**************************************************
+    8801    ICE assigning to __ctfe
+**************************************************/
+static assert(!is(typeof( { bool __ctfe= true; })));
+static assert(!is(typeof( { __ctfe |= true; })));
+
+/**************************************************
     5932    ICE(s2ir.c)
     6675    ICE(glue.c)
 **************************************************/
@@ -64,7 +93,18 @@ template bug6661(Q)
     const Q blaz = 6;
 }
 
-static assert(is(typeof(bug6661!(int).blaz)));
+static assert(!is(typeof(bug6661!(int).blaz)));
+
+template bug6661x(Q)
+{
+    int qutz(Q y)
+    {
+        Q q = "abc";
+        return 67;
+    }
+}
+// should pass, but doesn't in current
+//static assert(!is(typeof(bug6661x!(int))));
 
 /**************************************************
     6599    ICE(constfold.c) or segfault
@@ -134,6 +174,15 @@ static assert( !is(typeof( (){
   }())));
 
 /**************************************************
+    8639  Buffer overflow
+**************************************************/
+
+void t8639(alias a)() {}
+void bug8639() {
+  t8639!({auto r = -real.max;})();
+}
+
+/**************************************************
     7751  Segfault
 **************************************************/
 
@@ -192,6 +241,110 @@ struct Foo1099 {
 }
 
 /**************************************************
+    8788 - super() and return
+**************************************************/
+
+class B8788 {
+        this ( ) { }
+}
+
+class C8788(int test) : B8788
+{
+    this ( int y )
+    {   // TESTS WHICH SHOULD PASS
+        static if (test == 1) {
+            if (y == 3) {
+                super();
+                return;
+            }
+            super();
+            return;
+        } else static if (test == 2) {
+            if (y == 3) {
+                super();
+                return;
+            }
+            super();
+        } else static if (test == 3) {
+            if (y > 3) {
+                if (y == 7) {
+                   super();
+                   return;
+                }
+                super();
+                return;
+            }
+            super();
+        } else static if (test == 4) {
+            if (y > 3) {
+                if (y == 7) {
+                   super();
+                   return;
+                }
+                else if (y> 5)
+                    super();
+                else super();
+                return;
+            }
+            super();
+        }
+        // TESTS WHICH SHOULD FAIL
+        else static if (test == 5) {
+            if (y == 3) {
+                super();
+                return;
+            }
+            return; // no super
+        } else static if (test == 6) {
+            if (y > 3) {
+                if (y == 7) {
+                   super();
+                   return;
+                }
+                super();
+            }
+            super(); // two calls
+        } else static if (test == 7) {
+            if (y == 3) {
+                return; // no super
+            }
+            super();
+        } else static if (test == 8) {
+            if (y > 3) {
+                if (y == 7) {
+                   return; // no super
+                }
+                super();
+                return;
+            }
+            super();
+        } else static if (test == 9) {
+            if (y > 3) {
+                if (y == 7) {
+                   super();
+                   return;
+                }
+                else if (y> 5)
+                    super();
+                else return; // no super
+                return;
+            }
+            super();
+        }
+    }
+}
+
+static assert( is(typeof( { new C8788!(1)(0); } )));
+static assert( is(typeof( { new C8788!(2)(0); } )));
+static assert( is(typeof( { new C8788!(3)(0); } )));
+static assert( is(typeof( { new C8788!(4)(0); } )));
+static assert(!is(typeof( { new C8788!(5)(0); } )));
+static assert(!is(typeof( { new C8788!(6)(0); } )));
+static assert(!is(typeof( { new C8788!(7)(0); } )));
+static assert(!is(typeof( { new C8788!(8)(0); } )));
+static assert(!is(typeof( { new C8788!(9)(0); } )));
+
+/**************************************************
     4967, 7058
 **************************************************/
 
@@ -234,3 +387,33 @@ alias test8163!(ubyte, ubyte, ubyte, ubyte, ubyte, ubyte, ubyte, ubyte) _BBBBBBB
 alias test8163!(ubyte, ubyte, ushort, float) _BBSf;
 
 
+/***************************************************/
+// 9348
+
+void test9348()
+{
+    @property Object F(int E)() { return null; }
+
+    assert(F!0 !is null);
+    assert(F!0 !in [new Object():1]);
+}
+
+
+/***************************************************/
+// 9987
+
+static if (is(object.ModuleInfo == struct))
+{
+    struct ModuleInfo {}
+
+    static assert(!is(object.ModuleInfo == ModuleInfo));
+    static assert(object.ModuleInfo.sizeof != ModuleInfo.sizeof);
+}
+static if (is(object.ModuleInfo == class))
+{
+    class ModuleInfo {}
+
+    static assert(!is(object.ModuleInfo == ModuleInfo));
+    static assert(__traits(classInstanceSize, object.ModuleInfo) !=
+                  __traits(classInstanceSize, ModuleInfo));
+}

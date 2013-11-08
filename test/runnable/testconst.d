@@ -533,8 +533,16 @@ struct S40
 
 void test40()
 {
+  version (PULL93)
+  {
+    assert(S40.sizeof == 8);
+    assert(S40.init.b == 3);
+  }
+  else
+  {
     assert(S40.sizeof == 4);
     assert(S40.b == 3);
+  }
 }
 
 /************************************/
@@ -566,7 +574,14 @@ class C42
 {
     int a = ctfe() - 2;
     const int b;
+  version (PULL93)
+  {
+    enum int c = ctfe();
+  }
+  else
+  {
     const int c = ctfe();
+  }
     static const int d;
     static const int e = ctfe() + 2;
 
@@ -584,7 +599,14 @@ class C42
 void test42()
 {
     printf("%d\n", C42.classinfo.init.length);
+  version (PULL93)
+  {
+    assert(C42.classinfo.init.length == 12 + (void*).sizeof + (void*).sizeof);
+  }
+  else
+  {
     assert(C42.classinfo.init.length == 8 + (void*).sizeof + (void*).sizeof);
+  }
     C42 c = new C42;
     assert(c.a == 1);
     assert(c.b == 2);
@@ -595,8 +617,11 @@ void test42()
     const(int)*p;
     p = &c.b;
     assert(*p == 2);
-//    p = &c.c;
-//    assert(*p == 3);
+  version (PULL93)
+  {
+    p = &c.c;
+    assert(*p == 3);
+  }
     p = &c.d;
     assert(*p == 4);
     p = &c.e;
@@ -2116,7 +2141,7 @@ void test5493()
     class C
     {
         int x;
-        this(int i) { x = i; }
+        this(int i) immutable { x = i; }
     }
     C[] cs;
     immutable C ci = new immutable(C)(6);
@@ -2744,6 +2769,229 @@ void test8212()
 }
 
 /************************************/
+// 8366
+
+class B8366
+{
+    bool foo(in Object o) const { return true; }
+}
+
+class C8366a : B8366
+{
+    bool foo(in Object o)              { return true; }
+  override
+    bool foo(in Object o) const        { return false; }
+    bool foo(in Object o) immutable    { return true; }
+    bool foo(in Object o) shared       { return true; }
+    bool foo(in Object o) shared const { return true; }
+}
+
+class C8366b : B8366
+{
+    bool foo(in Object o)              { return false; }
+    alias super.foo foo;
+    bool foo(in Object o) immutable    { return false; }
+    bool foo(in Object o) shared       { return false; }
+    bool foo(in Object o) shared const { return false; }
+}
+
+void test8366()
+{
+    {
+              C8366a mca = new C8366a();
+        const C8366a cca = new C8366a();
+              B8366  mb  = mca;
+        const B8366  cb  = cca;
+        assert(mca.foo(null) == true);
+        assert(cca.foo(null) == false);
+        assert(mb .foo(null) == false);
+        assert(cb .foo(null) == false);
+    }
+    {
+              C8366b mcb = new C8366b();
+        const C8366b ccb = new C8366b();
+              B8366  mb  = mcb;
+        const B8366  cb  = ccb;
+        assert(mcb.foo(null) == false);
+        assert(ccb.foo(null) == true);
+        assert(mb .foo(null) == true);
+        assert(cb .foo(null) == true);
+    }
+}
+
+/************************************/
+// 8408
+
+template hasMutableIndirection8408(T)
+{
+    template Unqual(T)
+    {
+             static if (is(T U == shared(const U))) alias U Unqual;
+        else static if (is(T U ==        const U )) alias U Unqual;
+        else static if (is(T U ==    immutable U )) alias U Unqual;
+        else static if (is(T U ==        inout U )) alias U Unqual;
+        else static if (is(T U ==       shared U )) alias U Unqual;
+        else                                        alias T Unqual;
+    }
+
+    enum hasMutableIndirection8408 = !is(typeof({ Unqual!T t = void; immutable T u = t; }));
+}
+static assert(!hasMutableIndirection8408!(int));
+static assert(!hasMutableIndirection8408!(int[3]));
+static assert( hasMutableIndirection8408!(Object));
+
+auto dup8408(E)(inout(E)[] arr) pure @trusted
+{
+    static if (hasMutableIndirection8408!E)
+    {
+        auto copy = new E[](arr.length);
+        copy[] = cast(E[])arr[];        // assume constant
+        return cast(inout(E)[])copy;    // assume constant
+    }
+    else
+    {
+        auto copy = new E[](arr.length);
+        copy[] = arr[];
+        return copy;
+    }
+}
+
+void test8408()
+{
+    void test(E, bool constConv)()
+    {
+                  E[] marr = [E.init, E.init, E.init];
+        immutable E[] iarr = [E.init, E.init, E.init];
+
+                  E[] m2m = marr.dup8408();    assert(m2m == marr);
+        immutable E[] i2i = iarr.dup8408();    assert(i2i == iarr);
+
+      static if (constConv)
+      { // If dup() hss strong purity, implicit conversion is allowed
+        immutable E[] m2i = marr.dup8408();    assert(m2i == marr);
+                  E[] i2m = iarr.dup8408();    assert(i2m == iarr);
+      }
+      else
+      {
+        static assert(!is(typeof({ immutable E[] m2i = marr.dup8408(); })));
+        static assert(!is(typeof({           E[] i2m = iarr.dup8408(); })));
+      }
+    }
+
+    class C {}
+    struct S1 { long n; }
+    struct S2 { int* p; }
+    struct T1 { S1 s; }
+    struct T2 { S2 s; }
+    struct T3 { S1 s1;  S2 s2; }
+
+    test!(int   , true )();
+    test!(int[3], true )();
+    test!(C     , false)();
+    test!(S1    , true )();
+    test!(S2    , false)();
+    test!(T1    , true )();
+    test!(T2    , false)();
+    test!(T3    , false)();
+}
+
+/************************************/
+// 8688
+
+void test8688()
+{
+    alias TypeTuple!(int) T;
+    foreach (i; TypeTuple!(0))
+    {
+        alias const(T[i]) X;
+        static assert(!is(X == int));           // fails
+        static assert( is(X == const(int)));    // fails
+    }
+}
+
+/************************************/
+// 9046
+
+void test9046()
+{
+    foreach (T; TypeTuple!(byte, ubyte, short, ushort, int, uint, long, ulong, char, wchar, dchar,
+                           float, double, real, ifloat, idouble, ireal, cfloat, cdouble, creal))
+    foreach (U; TypeTuple!(T, const T, immutable T, shared T, shared const T, inout T, shared inout T))
+    {
+        static assert(is(typeof(U.init) == U));
+    }
+
+    foreach (T; TypeTuple!(int[], const(char)[], immutable(string[]), shared(const(int)[])[],
+                           int[1], const(char)[1], immutable(string[1]), shared(const(int)[1])[],
+                           int[int], const(char)[long], immutable(string[string]), shared(const(int)[double])[]))
+    foreach (U; TypeTuple!(T, const T, immutable T, shared T, shared const T, inout T, shared inout T))
+    {
+        static assert(is(typeof(U.init) == U));
+    }
+
+    int i;
+    enum E { x, y }
+    static struct S {}
+    static class  C {}
+    struct NS { void f(){ i++; } }
+    class  NC { void f(){ i++; } }
+    foreach (T; TypeTuple!(E, S, C, NS, NC))
+    foreach (U; TypeTuple!(T, const T, immutable T, shared T, shared const T, inout T, shared inout T))
+    {
+        static assert(is(typeof(U.init) == U));
+    }
+
+    alias TL = TypeTuple!(int, string, int[int]);
+    foreach (U; TypeTuple!(TL, const TL, immutable TL, shared TL, shared const TL, inout TL, shared inout TL))
+    {
+        static assert(is(typeof(U.init) == U));
+    }
+}
+
+/************************************/
+// 9090
+
+void test9090()
+{
+    void test1(T)(auto ref const T[] val) {}
+
+    string a;
+    test1(a);
+}
+
+/************************************/
+// 9461
+
+void test9461()
+{
+    class A {}
+    class B : A {}
+
+    void conv(S, T)(ref S x) { T y = x; }
+
+    // should be NG
+    static assert(!__traits(compiles, conv!(inout(B)[],     inout(A)[])));
+    static assert(!__traits(compiles, conv!(int[inout(B)],  int[inout(A)])));
+    static assert(!__traits(compiles, conv!(inout(B)[int],  inout(A)[int])));
+    static assert(!__traits(compiles, conv!(inout(B)*,      inout(A)*)));
+    static assert(!__traits(compiles, conv!(inout(B)[1],    inout(A)[])));
+
+    // should be OK
+    static assert( __traits(compiles, conv!(inout(B),       inout(A))));
+}
+
+/************************************/
+
+struct S9209 { int x; }
+
+void bar9209(const S9209*) {}
+
+void test9209() {
+    const f = new S9209(1);
+    bar9209(f);
+}
+
+/************************************/
 
 int main()
 {
@@ -2861,6 +3109,13 @@ int main()
     test8099();
     test8201();
     test8212();
+    test8366();
+    test8408();
+    test8688();
+    test9046();
+    test9090();
+    test9461();
+    test9209();
 
     printf("Success\n");
     return 0;

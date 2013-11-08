@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -131,6 +130,7 @@ elem_p el_params(elem_p , ...);
 elem *el_params(void **args, int length);
 elem *el_combines(void **args, int length);
 int el_nparams(elem *e);
+void el_paramArray(elem ***parray, elem *e);
 elem_p el_pair(tym_t, elem_p, elem_p);
 void el_copy(elem_p ,elem_p);
 elem_p el_alloctmp(tym_t);

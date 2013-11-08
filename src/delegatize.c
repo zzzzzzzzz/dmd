@@ -19,6 +19,7 @@
 #include "declaration.h"
 #include "aggregate.h"
 #include "scope.h"
+#include "init.h"
 
 /********************************************
  * Convert from expression to delegate that returns the expression,
@@ -37,6 +38,7 @@ Expression *Expression::toDelegate(Scope *sc, Type *t)
     Type *tw = t->semantic(loc, sc);
     Type *tc = t->substWildTo(MODconst)->semantic(loc, sc);
     TypeFunction *tf = new TypeFunction(NULL, tc, 0, LINKd);
+    if (tw != tc) tf->mod = MODwild;                            // hack for bug7757
     (tf = (TypeFunction *)tf->semantic(loc, sc))->next = tw;    // hack for bug7757
     FuncLiteralDeclaration *fld =
         new FuncLiteralDeclaration(loc, loc, tf, TOKdelegate, NULL);
@@ -114,7 +116,7 @@ int lambdaCheckForNestedRef(Expression *e, void *param)
         {   SymOffExp *se = (SymOffExp *)e;
             VarDeclaration *v = se->var->isVarDeclaration();
             if (v)
-                v->checkNestedReference(sc, 0);
+                v->checkNestedReference(sc, Loc());
             break;
         }
 
@@ -122,7 +124,7 @@ int lambdaCheckForNestedRef(Expression *e, void *param)
         {   VarExp *ve = (VarExp *)e;
             VarDeclaration *v = ve->var->isVarDeclaration();
             if (v)
-                v->checkNestedReference(sc, 0);
+                v->checkNestedReference(sc, Loc());
             break;
         }
 
@@ -131,7 +133,31 @@ int lambdaCheckForNestedRef(Expression *e, void *param)
         {   ThisExp *te = (ThisExp *)e;
             VarDeclaration *v = te->var->isVarDeclaration();
             if (v)
-                v->checkNestedReference(sc, 0);
+                v->checkNestedReference(sc, Loc());
+            break;
+        }
+
+        case TOKdeclaration:
+        {   DeclarationExp *de = (DeclarationExp *)e;
+            VarDeclaration *v = de->declaration->isVarDeclaration();
+            if (v)
+            {
+                v->checkNestedReference(sc, Loc());
+
+                /* Some expressions cause the frontend to create a temporary.
+                 * For example, structs with cpctors replace the original
+                 * expression e with:
+                 *  __cpcttmp = __cpcttmp.cpctor(e);
+                 *
+                 * In this instance, we need to ensure that the original
+                 * expression e does not have any nested references by
+                 * checking the declaration initializer too.
+                 */
+                if (v->init && v->init->isExpInitializer())
+                {   Expression *ie = v->init->toExpression();
+                    ie->apply (&lambdaCheckForNestedRef, param);
+                }
+            }
             break;
         }
 

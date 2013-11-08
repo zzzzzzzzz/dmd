@@ -144,6 +144,8 @@ void tfun4c(T)(T f){}
 void test4()
 {
     int v;
+    static void sfoo() {}
+           void nfoo() {}
 
     // parameter type inference + overload resolution
     assert(foo4((a)   => a * 2) == 20);
@@ -158,8 +160,13 @@ void test4()
     // function/delegate inference + overload resolution
     assert(nbaz4({ }) == 1);
     assert(nbaz4({ v = 1; }) == 2);
+    assert(nbaz4({ sfoo(); }) == 1);    // Bugzilla 8836
+    assert(nbaz4({ nfoo(); }) == 2);
+
     assert(tbaz4({ }) == 1);
     assert(tbaz4({ v = 1; }) == 2);
+    assert(tbaz4({ sfoo(); }) == 1);
+    assert(tbaz4({ nfoo(); }) == 2);
 
     // template function deduction
     static assert(is(typeof(thoo4({ })) : void function()));
@@ -579,7 +586,7 @@ void test8198()
         return f => x => f(n(f)(x));
     }
 
-    auto n = &zero!uint;
+    uint delegate(uint) delegate(uint delegate(uint)) n = &zero!uint;
     foreach (i; 0..10)
     {
         assert(n(x => x + 1)(0) == i);
@@ -661,6 +668,97 @@ void test8397()
 }
 
 /***************************************************/
+// 8496
+
+void test8496()
+{
+    alias extern (C) void function() Func;
+
+    Func fp = (){};
+
+    fp = (){};
+}
+
+/***************************************************/
+// 8575
+
+template tfunc8575(func...)
+{
+    auto tfunc8575(U)(U u) { return func[0](u); }
+}
+auto bar8575(T)(T t)
+{
+    return tfunc8575!(a => a)(t);
+}
+void foo8575a() { assert(bar8575(uint.init + 1) == +1); }
+void foo8575b() { assert(bar8575( int.init - 1) == -1); }
+
+void test8575()
+{
+    foo8575a();
+    foo8575b();
+}
+
+/***************************************************/
+// 9153
+
+void writeln9153(string s){}
+
+void test9153()
+{
+    auto tbl1 = [
+        (string x) { writeln9153(x); },
+        (string x) { x ~= 'a'; },
+    ];
+    auto tbl2 = [
+        (string x) { x ~= 'a'; },
+        (string x) { writeln9153(x); },
+    ];
+}
+
+/***************************************************/
+// 9393
+
+template ifThrown9393a(E)
+{
+    void ifThrown9393a(T)(scope T delegate(E) errHandler)
+    {
+    }
+}
+void ifThrown9393b(E, T)(scope T delegate(E) errHandler)
+{
+}
+
+void foo9393(T)(void delegate(T) dg){ dg(T.init); }
+void foo9393()(void delegate(int) dg){ foo9393!int(dg); }
+
+void test9393()
+{
+    ifThrown9393a!Exception(e => 10);
+    ifThrown9393b!Exception(e => 10);
+
+    foo9393((x){ assert(x == int.init); });
+}
+
+/***************************************************/
+// 9415
+
+void test9415()
+{
+    int z;
+    typeof((int a){return z;}) dg;
+    dg = (int a){return z;};
+}
+
+/***************************************************/
+// 9928
+
+void test9928()
+{
+    void* smth = (int x) { return x; };
+}
+
+/***************************************************/
 
 int main()
 {
@@ -699,6 +797,12 @@ int main()
     test8242();
     test8315();
     test8397();
+    test8496();
+    test8575();
+    test9153();
+    test9393();
+    test9415();
+    test9928();
 
     printf("Success\n");
     return 0;

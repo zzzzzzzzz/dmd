@@ -28,6 +28,7 @@
 #include        "module.h"
 #include        "init.h"
 #include        "template.h"
+#include        "target.h"
 
 #include        "mem.h" // for mem_malloc
 
@@ -47,6 +48,7 @@ static char __file__[] = __FILE__;      /* for tassert.h                */
 #include        "tassert.h"
 
 bool ISREF(Declaration *var, Type *tb);
+bool ISWIN64REF(Declaration *var);
 
 
 /*********************************************
@@ -330,7 +332,6 @@ int intrinsic_op(char *name)
         "4math6rndtolFeZl",
         "4math6yl2xp1FeeZe",
 
-        "9intrinsic2btFPkkZi",
         "9intrinsic3bsfFkZi",
         "9intrinsic3bsrFkZi",
         "9intrinsic3btcFPkkZi",
@@ -375,7 +376,6 @@ int intrinsic_op(char *name)
         "4math6rndtolFeZl",
         "4math6yl2xp1FeeZe",
 
-        "9intrinsic2btFPmmZi",
         "9intrinsic3bsfFkZi",
         "9intrinsic3bsrFkZi",
         "9intrinsic3btcFPmmZi",
@@ -435,9 +435,16 @@ int intrinsic_op(char *name)
         "4math6rndtolFNaNbNfeZl",
         "4math6yl2xp1FNaNbNfeeZe",
 
+        "4simd10__simd_stoFNaNbNfE4core4simd3XMMNhG16vNhG16vZNhG16v",
+        "4simd10__simd_stoFNaNbNfE4core4simd3XMMdNhG16vZNhG16v",
+        "4simd10__simd_stoFNaNbNfE4core4simd3XMMfNhG16vZNhG16v",
         "4simd6__simdFNaNbNfE4core4simd3XMMNhG16vNhG16vZNhG16v",
+        "4simd6__simdFNaNbNfE4core4simd3XMMNhG16vNhG16vhZNhG16v",
+        "4simd6__simdFNaNbNfE4core4simd3XMMNhG16vZNhG16v",
+        "4simd6__simdFNaNbNfE4core4simd3XMMdZNhG16v",
+        "4simd6__simdFNaNbNfE4core4simd3XMMfZNhG16v",
+        "4simd9__simd_ibFNaNbNfE4core4simd3XMMNhG16vhZNhG16v",
 
-        "5bitop2btFNaNbNfxPkkZi",
         "5bitop3bsfFNaNbNfkZi",
         "5bitop3bsrFNaNbNfkZi",
         "5bitop3btcFNaNbNfPkkZi",
@@ -465,9 +472,16 @@ int intrinsic_op(char *name)
         "4math6rndtolFNaNbNfeZl",
         "4math6yl2xp1FNaNbNfeeZe",
 
+        "4simd10__simd_stoFNaNbNfE4core4simd3XMMNhG16vNhG16vZNhG16v",
+        "4simd10__simd_stoFNaNbNfE4core4simd3XMMdNhG16vZNhG16v",
+        "4simd10__simd_stoFNaNbNfE4core4simd3XMMfNhG16vZNhG16v",
         "4simd6__simdFNaNbNfE4core4simd3XMMNhG16vNhG16vZNhG16v",
+        "4simd6__simdFNaNbNfE4core4simd3XMMNhG16vNhG16vhZNhG16v",
+        "4simd6__simdFNaNbNfE4core4simd3XMMNhG16vZNhG16v",
+        "4simd6__simdFNaNbNfE4core4simd3XMMdZNhG16v",
+        "4simd6__simdFNaNbNfE4core4simd3XMMfZNhG16v",
+        "4simd9__simd_ibFNaNbNfE4core4simd3XMMNhG16vhZNhG16v",
 
-        "5bitop2btFNaNbNfxPmmZi",
         "5bitop3bsfFNaNbNfmZi",
         "5bitop3bsrFNaNbNfmZi",
         "5bitop3btcFNaNbNfPmmZi",
@@ -496,8 +510,15 @@ int intrinsic_op(char *name)
         OPyl2xp1,
 
         OPvector,
+        OPvector,
+        OPvector,
+        OPvector,
+        OPvector,
+        OPvector,
+        OPvector,
+        OPvector,
+        OPvector,
 
-        OPbt,
         OPbsf,
         OPbsr,
         OPbtc,
@@ -666,16 +687,17 @@ void FuncDeclaration::buildClosure(IRState *irs)
          *    }
          */
 #endif
-        //printf("FuncDeclaration::buildClosure()\n");
+        //printf("FuncDeclaration::buildClosure() %s\n", toChars());
         Symbol *sclosure;
         sclosure = symbol_name("__closptr",SCauto,Type::tvoidptr->toCtype());
         sclosure->Sflags |= SFLtrue | SFLfree;
         symbol_add(sclosure);
         irs->sclosure = sclosure;
 
-        unsigned offset = PTRSIZE;      // leave room for previous sthis
+        unsigned offset = Target::ptrsize;      // leave room for previous sthis
         for (size_t i = 0; i < closureVars.dim; i++)
         {   VarDeclaration *v = closureVars[i];
+            //printf("closure var %s\n", v->toChars());
             assert(v->isVarDeclaration());
 
 #if DMDV2
@@ -702,15 +724,21 @@ void FuncDeclaration::buildClosure(IRState *irs)
                 /* Lazy variables are really delegates,
                  * so give same answers that TypeDelegate would
                  */
-                memsize = PTRSIZE * 2;
+                memsize = Target::ptrsize * 2;
                 memalignsize = memsize;
-                xalign = global.structalign;
+                xalign = STRUCTALIGN_DEFAULT;
+            }
+            else if (ISWIN64REF(v))
+            {
+                memsize = v->type->size();
+                memalignsize = v->type->alignsize();
+                xalign = v->alignment;
             }
             else if (ISREF(v, NULL))
             {    // reference parameters are just pointers
-                memsize = PTRSIZE;
+                memsize = Target::ptrsize;
                 memalignsize = memsize;
-                xalign = global.structalign;
+                xalign = STRUCTALIGN_DEFAULT;
             }
             else
 #endif
@@ -760,11 +788,15 @@ void FuncDeclaration::buildClosure(IRState *irs)
             if (!v->isParameter())
                 continue;
             tym_t tym = v->type->totym();
-            if (
-#if !SARRAYVALUE
-                v->type->toBasetype()->ty == Tsarray ||
+            bool win64ref = ISWIN64REF(v);
+            if (win64ref)
+            {
+#if DMDV2
+                if (v->storage_class & STClazy)
+                    tym = TYdelegate;
 #endif
-                ISREF(v, NULL))
+            }
+            else if (ISREF(v, NULL))
                 tym = TYnptr;   // reference parameters are just pointers
 #if DMDV2
             else if (v->storage_class & STClazy)
@@ -772,15 +804,23 @@ void FuncDeclaration::buildClosure(IRState *irs)
 #endif
             ex = el_bin(OPadd, TYnptr, el_var(sclosure), el_long(TYsize_t, v->offset));
             ex = el_una(OPind, tym, ex);
+            elem *ev = el_var(v->toSymbol());
+            if (win64ref)
+            {
+                ev->Ety = TYnptr;
+                ev = el_una(OPind, tym, ev);
+                if (tybasic(ev->Ety) == TYstruct || tybasic(ev->Ety) == TYarray)
+                    ev->ET = v->type->toCtype();
+            }
             if (tybasic(ex->Ety) == TYstruct || tybasic(ex->Ety) == TYarray)
             {
                 ::type *t = v->type->toCtype();
                 ex->ET = t;
-                ex = el_bin(OPstreq, tym, ex, el_var(v->toSymbol()));
+                ex = el_bin(OPstreq, tym, ex, ev);
                 ex->ET = t;
             }
             else
-                ex = el_bin(OPeq, tym, ex, el_var(v->toSymbol()));
+                ex = el_bin(OPeq, tym, ex, ev);
 
             e = el_combine(e, ex);
         }
@@ -816,7 +856,7 @@ enum RET TypeFunction::retStyle()
     {   // http://msdn.microsoft.com/en-us/library/7572ztz4(v=vs.80)
         if (tns->isscalar())
             return RETregs;
-#if SARRAYVALUE
+
         if (tns->ty == Tsarray)
         {
             do
@@ -824,10 +864,10 @@ enum RET TypeFunction::retStyle()
                 tns = tns->nextOf()->toBasetype();
             } while (tns->ty == Tsarray);
         }
-#endif
+
         if (tns->ty == Tstruct)
         {   StructDeclaration *sd = ((TypeStruct *)tns)->sym;
-            if (!sd->isPOD())
+            if (!sd->isPOD() || sz >= 8)
                 return RETstack;
         }
         if (sz <= 16 && !(sz & (sz - 1)))
@@ -836,7 +876,6 @@ enum RET TypeFunction::retStyle()
     }
 
 Lagain:
-#if SARRAYVALUE
     if (tns->ty == Tsarray)
     {
         do
@@ -867,7 +906,6 @@ L2:
             return RETstack;
         }
     }
-#endif
 
     if (tns->ty == Tstruct)
     {   StructDeclaration *sd = ((TypeStruct *)tns)->sym;
@@ -879,12 +917,12 @@ L2:
         if (sd->arg1type && !sd->arg2type)
         {
             tns = sd->arg1type;
-#if SARRAYVALUE
             if (tns->ty != Tstruct)
                 goto L2;
-#endif
             goto Lagain;
         }
+        else if (global.params.is64bit && !sd->arg1type && !sd->arg2type)
+            return RETstack;
         else if (sd->isPOD())
         {
             switch (sz)
@@ -895,6 +933,10 @@ L2:
                     //printf("  3 RETregs\n");
                     return RETregs;     // return small structs in regs
                                         // (not 3 byte structs!)
+                case 16:
+                    if (!global.params.isWindows && global.params.is64bit)
+                       return RETregs;
+
                 default:
                     break;
             }

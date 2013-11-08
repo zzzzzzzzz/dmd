@@ -33,34 +33,41 @@
 #include "attrib.h"
 #include "enum.h"
 
+const char* Pprotectionnames[] = {NULL, "none", "private", "package", "protected", "public", "export"};
+
+
 /****************************** Dsymbol ******************************/
 
 Dsymbol::Dsymbol()
 {
     //printf("Dsymbol::Dsymbol(%p)\n", this);
     this->ident = NULL;
-    this->c_ident = NULL;
     this->parent = NULL;
     this->csym = NULL;
     this->isym = NULL;
-    this->loc = 0;
+    this->loc = Loc();
     this->comment = NULL;
     this->scope = NULL;
     this->errors = false;
+    this->depmsg = NULL;
+    this->userAttributes = NULL;
+    this->unittest = NULL;
 }
 
 Dsymbol::Dsymbol(Identifier *ident)
 {
     //printf("Dsymbol::Dsymbol(%p, ident)\n", this);
     this->ident = ident;
-    this->c_ident = NULL;
     this->parent = NULL;
     this->csym = NULL;
     this->isym = NULL;
-    this->loc = 0;
+    this->loc = Loc();
     this->comment = NULL;
     this->scope = NULL;
     this->errors = false;
+    this->depmsg = NULL;
+    this->userAttributes = NULL;
+    this->unittest = NULL;
 }
 
 int Dsymbol::equals(Object *o)
@@ -201,25 +208,13 @@ const char *Dsymbol::toPrettyChars()
         if (q == s)
             break;
         q--;
-#if TARGET_NET
-    if (AggregateDeclaration* ad = p->isAggregateDeclaration())
-    {
-        if (ad->isNested() && p->parent && p->parent->isAggregateDeclaration())
-        {
-            *q = '/';
-            continue;
-        }
-    }
-#endif
         *q = '.';
     }
     return s;
 }
 
-char *Dsymbol::locToChars()
+Loc& Dsymbol::getLoc()
 {
-    OutBuffer buf;
-
     if (!loc.filename)  // avoid bug 5861.
     {
         Module *m = getModule();
@@ -227,7 +222,12 @@ char *Dsymbol::locToChars()
         if (m && m->srcfile)
             loc.filename = m->srcfile->toChars();
     }
-    return loc.toChars();
+    return loc;
+}
+
+char *Dsymbol::locToChars()
+{
+    return getLoc().toChars();
 }
 
 const char *Dsymbol::kind()
@@ -263,6 +263,7 @@ Dsymbol *Dsymbol::pastMixin()
 /**********************************
  * Use this instead of toParent() when looking for the
  * 'this' pointer of the enclosing function/class.
+ * This skips over both TemplateInstance's and TemplateMixin's.
  */
 
 Dsymbol *Dsymbol::toParent2()
@@ -317,6 +318,8 @@ void Dsymbol::setScope(Scope *sc)
     if (!sc->nofree)
         sc->setNoFree();                // may need it even after semantic() finishes
     scope = sc;
+    if (sc->depmsg)
+        depmsg = sc->depmsg;
 }
 
 void Dsymbol::importAll(Scope *sc)
@@ -399,7 +402,7 @@ void *symbol_search_fp(void *arg, const char *seed)
 
     Dsymbol *s = (Dsymbol *)arg;
     Module::clearCache();
-    return s->search(0, id, 4|2);
+    return s->search(Loc(), id, 4|2);
 }
 
 Dsymbol *Dsymbol::search_correct(Identifier *ident)
@@ -417,7 +420,7 @@ Dsymbol *Dsymbol::search_correct(Identifier *ident)
  *      symbol found, NULL if not
  */
 
-Dsymbol *Dsymbol::searchX(Loc loc, Scope *sc, Identifier *id)
+Dsymbol *Dsymbol::searchX(Loc loc, Scope *sc, Object *id)
 {
     //printf("Dsymbol::searchX(this=%p,%s, ident='%s')\n", this, toChars(), ident->toChars());
     Dsymbol *s = toAlias();
@@ -426,7 +429,7 @@ Dsymbol *Dsymbol::searchX(Loc loc, Scope *sc, Identifier *id)
     switch (id->dyncast())
     {
         case DYNCAST_IDENTIFIER:
-            sm = s->search(loc, id, 0);
+            sm = s->search(loc, (Identifier *)id, 0);
             break;
 
         case DYNCAST_DSYMBOL:
@@ -434,7 +437,7 @@ Dsymbol *Dsymbol::searchX(Loc loc, Scope *sc, Identifier *id)
             //printf("\ttemplate instance id\n");
             Dsymbol *st = (Dsymbol *)id;
             TemplateInstance *ti = st->isTemplateInstance();
-            id = ti->name;
+            Identifier *id = ti->name;
             sm = s->search(loc, id, 0);
             if (!sm)
             {
@@ -502,6 +505,14 @@ AggregateDeclaration *Dsymbol::isAggregateMember()      // are we a member of an
     return NULL;
 }
 
+AggregateDeclaration *Dsymbol::isAggregateMember2()     // are we a member of an aggregate?
+{
+    Dsymbol *parent = toParent2();
+    if (parent && parent->isAggregateDeclaration())
+        return (AggregateDeclaration *)parent;
+    return NULL;
+}
+
 ClassDeclaration *Dsymbol::isClassMember()      // are we a member of a class?
 {
     AggregateDeclaration *ad = isAggregateMember();
@@ -523,9 +534,9 @@ int Dsymbol::isImportedSymbol()
     return FALSE;
 }
 
-int Dsymbol::isDeprecated()
+bool Dsymbol::isDeprecated()
 {
-    return FALSE;
+    return false;
 }
 
 #if DMDV2
@@ -583,7 +594,7 @@ int Dsymbol::addMember(Scope *sc, ScopeDsymbol *sd, int memnum)
             s2 = sd->symtab->lookup(ident);
             if (!s2->overloadInsert(this))
             {
-                sd->multiplyDefined(0, this, s2);
+                sd->multiplyDefined(Loc(), this, s2);
             }
         }
         if (sd->isAggregateDeclaration() || sd->isEnumDeclaration())
@@ -598,17 +609,9 @@ int Dsymbol::addMember(Scope *sc, ScopeDsymbol *sd, int memnum)
 
 void Dsymbol::error(const char *format, ...)
 {
-    //printf("Dsymbol::error()\n");
-    if (!loc.filename)  // avoid bug 5861.
-    {
-        Module *m = getModule();
-
-        if (m && m->srcfile)
-            loc.filename = m->srcfile->toChars();
-    }
     va_list ap;
     va_start(ap, format);
-    verror(loc, format, ap, kind(), toPrettyChars());
+    ::verror(getLoc(), format, ap, kind(), toPrettyChars());
     va_end(ap);
 }
 
@@ -616,13 +619,29 @@ void Dsymbol::error(Loc loc, const char *format, ...)
 {
     va_list ap;
     va_start(ap, format);
-    verror(loc, format, ap, kind(), toPrettyChars());
+    ::verror(loc, format, ap, kind(), toPrettyChars());
+    va_end(ap);
+}
+
+void Dsymbol::deprecation(Loc loc, const char *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    ::vdeprecation(loc, format, ap, kind(), toPrettyChars());
+    va_end(ap);
+}
+
+void Dsymbol::deprecation(const char *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    ::vdeprecation(getLoc(), format, ap, kind(), toPrettyChars());
     va_end(ap);
 }
 
 void Dsymbol::checkDeprecated(Loc loc, Scope *sc)
 {
-    if (!global.params.useDeprecated && isDeprecated())
+    if (global.params.useDeprecated != 1 && isDeprecated())
     {
         // Don't complain if we're inside a deprecated symbol's scope
         for (Dsymbol *sp = sc->parent; sp; sp = sp->parent)
@@ -640,7 +659,18 @@ void Dsymbol::checkDeprecated(Loc loc, Scope *sc)
                 goto L1;
         }
 
-        error(loc, "is deprecated");
+        char *message = NULL;
+        for (Dsymbol *p = this; p; p = p->parent)
+        {
+            message = p->depmsg;
+            if (message)
+                break;
+        }
+
+        if (message)
+            deprecation(loc, "is deprecated - %s", message);
+        else
+            deprecation(loc, "is deprecated");
     }
 
   L1:
@@ -699,7 +729,7 @@ Module *Dsymbol::getAccessModule()
         if (m)
             return m;
         TemplateInstance *ti = s->isTemplateInstance();
-        if (ti && ti->isnested)
+        if (ti && ti->enclosing)
             /* Because of local template instantiation, the parent isn't where the access
              * rights come from - it's the template declaration
              */
@@ -755,7 +785,7 @@ void Dsymbol::addComment(unsigned char *comment)
     if (!this->comment)
         this->comment = comment;
 #if 1
-    else if (comment && strcmp((char *)comment, (char *)this->comment))
+    else if (comment && strcmp((char *)comment, (char *)this->comment) != 0)
     {   // Concatenate the two
         this->comment = Lexer::combineComments(this->comment, comment);
     }
@@ -765,8 +795,8 @@ void Dsymbol::addComment(unsigned char *comment)
 /********************************* OverloadSet ****************************/
 
 #if DMDV2
-OverloadSet::OverloadSet()
-    : Dsymbol()
+OverloadSet::OverloadSet(Identifier *ident)
+    : Dsymbol(ident)
 {
 }
 
@@ -875,12 +905,20 @@ Dsymbol *ScopeDsymbol::search(Loc loc, Identifier *ident, int flags)
                          )
                        )
                     {
+                        /* Bugzilla 8668:
+                         * Public selective import adds AliasDeclaration in module.
+                         * To make an overload set, resolve aliases in here and
+                         * get actual overload roots which accessible via s and s2.
+                         */
+                        s = s->toAlias();
+                        s2 = s2->toAlias();
+
                         /* If both s2 and s are overloadable (though we only
                          * need to check s once)
                          */
                         if (s2->isOverloadable() && (a || s->isOverloadable()))
                         {   if (!a)
-                                a = new OverloadSet();
+                                a = new OverloadSet(s->ident);
                             /* Don't add to a[] if s2 is alias of previous sym
                              */
                             for (size_t j = 0; j < a->a.dim; j++)
@@ -1025,7 +1063,7 @@ Dsymbol *ScopeDsymbol::nameCollision(Dsymbol *s)
             return sprev;
         }
     }
-    multiplyDefined(0, s, sprev);
+    multiplyDefined(Loc(), s, sprev);
     return sprev;
 }
 
@@ -1176,7 +1214,7 @@ FuncDeclaration *ScopeDsymbol::findGetMembers()
 
         Type *tret = NULL;
         tfgetmembers = new TypeFunction(arguments, tret, 0, LINKd);
-        tfgetmembers = (TypeFunction *)tfgetmembers->semantic(0, &sc);
+        tfgetmembers = (TypeFunction *)tfgetmembers->semantic(Loc(), &sc);
     }
     if (fdx)
         fdx = fdx->overloadExactMatch(tfgetmembers);
@@ -1236,12 +1274,9 @@ ArrayScopeSymbol::ArrayScopeSymbol(Scope *sc, TupleDeclaration *s)
 Dsymbol *ArrayScopeSymbol::search(Loc loc, Identifier *ident, int flags)
 {
     //printf("ArrayScopeSymbol::search('%s', flags = %d)\n", ident->toChars(), flags);
-    if (ident == Id::length || ident == Id::dollar)
+    if (ident == Id::dollar)
     {   VarDeclaration **pvar;
         Expression *ce;
-
-        if (ident == Id::length && !global.params.useDeprecated)
-            error("using 'length' inside [ ] is deprecated, use '$' instead");
 
     L1:
 
@@ -1249,8 +1284,8 @@ Dsymbol *ArrayScopeSymbol::search(Loc loc, Identifier *ident, int flags)
         {   /* $ gives the number of elements in the tuple
              */
             VarDeclaration *v = new VarDeclaration(loc, Type::tsize_t, Id::dollar, NULL);
-            Expression *e = new IntegerExp(0, td->objects->dim, Type::tsize_t);
-            v->init = new ExpInitializer(0, e);
+            Expression *e = new IntegerExp(Loc(), td->objects->dim, Type::tsize_t);
+            v->init = new ExpInitializer(Loc(), e);
             v->storage_class |= STCstatic | STCconst;
             v->semantic(sc);
             return v;
@@ -1260,8 +1295,8 @@ Dsymbol *ArrayScopeSymbol::search(Loc loc, Identifier *ident, int flags)
         {   /* $ gives the number of type entries in the type tuple
              */
             VarDeclaration *v = new VarDeclaration(loc, Type::tsize_t, Id::dollar, NULL);
-            Expression *e = new IntegerExp(0, type->arguments->dim, Type::tsize_t);
-            v->init = new ExpInitializer(0, e);
+            Expression *e = new IntegerExp(Loc(), type->arguments->dim, Type::tsize_t);
+            v->init = new ExpInitializer(Loc(), e);
             v->storage_class |= STCstatic | STCconst;
             v->semantic(sc);
             return v;
@@ -1288,67 +1323,17 @@ Dsymbol *ArrayScopeSymbol::search(Loc loc, Identifier *ident, int flags)
              * $ is a opDollar!(dim)() where dim is the dimension(0,1,2,...)
              */
             ArrayExp *ae = (ArrayExp *)exp;
-            AggregateDeclaration *ad = NULL;
 
-            Type *t = ae->e1->type->toBasetype();
-            if (t->ty == Tclass)
-            {
-                ad = ((TypeClass *)t)->sym;
-            }
-            else if (t->ty == Tstruct)
-            {
-                ad = ((TypeStruct *)t)->sym;
-            }
-            assert(ad);
-
-            Dsymbol *dsym = search_function(ad, Id::opDollar);
-            if (!dsym)  // no dollar exists -- search in higher scope
-                return NULL;
-            VarDeclaration *v = ae->lengthVar;
-            if (!v)
-            {   // $ is lazily initialized. Create it now.
-                TemplateDeclaration *td = dsym->isTemplateDeclaration();
-                if (td)
-                {   // Instantiate opDollar!(dim) with the index as a template argument
-                    Objects *tdargs = new Objects();
-                    tdargs->setDim(1);
-
-                    Expression *x = new IntegerExp(0, ae->currentDimension, Type::tsize_t);
-                    x = x->semantic(sc);
-                    tdargs->data[0] = x;
-
-                    //TemplateInstance *ti = new TemplateInstance(loc, td, tdargs);
-                    //ti->semantic(sc);
-
-                    DotTemplateInstanceExp *dte = new DotTemplateInstanceExp(loc, ae->e1, td->ident, tdargs);
-
-                    v = new VarDeclaration(loc, NULL, Id::dollar, new ExpInitializer(0, dte));
-                }
-                else
-                {   /* opDollar exists, but it's a function, not a template.
-                     * This is acceptable ONLY for single-dimension indexing.
-                     * Note that it's impossible to have both template & function opDollar,
-                     * because both take no arguments.
-                     */
-                    if (ae->arguments->dim != 1) {
-                        ae->error("%s only defines opDollar for one dimension", ad->toChars());
-                        return NULL;
-                    }
-                    FuncDeclaration *fd = dsym->isFuncDeclaration();
-                    assert(fd);
-                    Expression * x = new DotVarExp(loc, ae->e1, fd);
-
-                    v = new VarDeclaration(loc, NULL, Id::dollar, new ExpInitializer(0, x));
-                }
-                v->semantic(sc);
-                ae->lengthVar = v;
-            }
-            return v;
+            pvar = &ae->lengthVar;
+            ce = ae->e1;
         }
         else
             /* Didn't find $, look in enclosing scope(s).
              */
             return NULL;
+
+        while (ce->op == TOKcomma)
+            ce = ((CommaExp *)ce)->e2;
 
         /* If we are indexing into an array that is really a type
          * tuple, rewrite this as an index into a type tuple and
@@ -1369,14 +1354,106 @@ Dsymbol *ArrayScopeSymbol::search(Loc loc, Identifier *ident, int flags)
         if (!*pvar)             // if not already initialized
         {   /* Create variable v and set it to the value of $
              */
-            VarDeclaration *v = new VarDeclaration(loc, Type::tsize_t, Id::dollar, NULL);
+            VarDeclaration *v;
+            Type *t;
             if (ce->op == TOKtuple)
             {   /* It is for an expression tuple, so the
                  * length will be a const.
                  */
-                Expression *e = new IntegerExp(0, ((TupleExp *)ce)->exps->dim, Type::tsize_t);
-                v->init = new ExpInitializer(0, e);
+                Expression *e = new IntegerExp(Loc(), ((TupleExp *)ce)->exps->dim, Type::tsize_t);
+                v = new VarDeclaration(loc, Type::tsize_t, Id::dollar, new ExpInitializer(Loc(), e));
                 v->storage_class |= STCstatic | STCconst;
+            }
+            else if (ce->type && (t = ce->type->toBasetype()) != NULL &&
+                     (t->ty == Tstruct || t->ty == Tclass))
+            {   // Look for opDollar
+                assert(exp->op == TOKarray || exp->op == TOKslice);
+                AggregateDeclaration *ad = NULL;
+
+                if (t->ty == Tclass)
+                {
+                    ad = ((TypeClass *)t)->sym;
+                }
+                else if (t->ty == Tstruct)
+                {
+                    ad = ((TypeStruct *)t)->sym;
+                }
+                assert(ad);
+
+                Dsymbol *s = ad->search(loc, Id::opDollar, 0);
+                if (!s)  // no dollar exists -- search in higher scope
+                    return NULL;
+                s = s->toAlias();
+
+                if (ce->hasSideEffect())
+                {
+                    /* Even if opDollar is needed, 'ce' should be evaluate only once. So
+                     * Rewrite:
+                     *      ce.opIndex( ... use of $ ... )
+                     *      ce.opSlice( ... use of $ ... )
+                     * as:
+                     *      (ref __dop = ce, __dop).opIndex( ... __dop.opDollar ...)
+                     *      (ref __dop = ce, __dop).opSlice( ... __dop.opDollar ...)
+                     */
+                    Identifier *id = Lexer::uniqueId("__dop");
+                    ExpInitializer *ei = new ExpInitializer(loc, ce);
+                    VarDeclaration *v = new VarDeclaration(loc, NULL, id, ei);
+                    v->storage_class |= STCctfe | STCforeach | STCref;
+                    DeclarationExp *de = new DeclarationExp(loc, v);
+                    VarExp *ve = new VarExp(loc, v);
+                    v->semantic(sc);
+                    de->type = ce->type;
+                    ve->type = ce->type;
+                    ((UnaExp *)exp)->e1 = new CommaExp(loc, de, ve);
+                    ce = ve;
+                }
+
+                Expression *e = NULL;
+                // Check for multi-dimensional opDollar(dim) template.
+                if (TemplateDeclaration *td = s->isTemplateDeclaration())
+                {
+                    dinteger_t dim;
+                    if (exp->op == TOKarray)
+                    {
+                        dim = ((ArrayExp *)exp)->currentDimension;
+                    }
+                    else if (exp->op == TOKslice)
+                    {
+                        dim = 0; // slices are currently always one-dimensional
+                    }
+
+                    Objects *tdargs = new Objects();
+                    Expression *edim = new IntegerExp(Loc(), dim, Type::tsize_t);
+                    edim = edim->semantic(sc);
+                    tdargs->push(edim);
+
+                    //TemplateInstance *ti = new TemplateInstance(loc, td, tdargs);
+                    //ti->semantic(sc);
+
+                    e = new DotTemplateInstanceExp(loc, ce, td->ident, tdargs);
+                }
+                else
+                {   /* opDollar exists, but it's not a template.
+                     * This is acceptable ONLY for single-dimension indexing.
+                     * Note that it's impossible to have both template & function opDollar,
+                     * because both take no arguments.
+                     */
+                    if (exp->op == TOKarray && ((ArrayExp *)exp)->arguments->dim != 1)
+                    {
+                        exp->error("%s only defines opDollar for one dimension", ad->toChars());
+                        return NULL;
+                    }
+                    Declaration *d = s->isDeclaration();
+                    assert(d);
+                    e = new DotVarExp(loc, ce, d);
+                }
+                e = e->semantic(sc);
+                if (!e->type)
+                    exp->error("%s has no value", e->toChars());
+                t = e->type->toBasetype();
+                if (t && t->ty == Tfunction)
+                    e = new CallExp(e->loc, e);
+                v = new VarDeclaration(loc, NULL, Id::dollar, new ExpInitializer(Loc(), e));
             }
             else
             {   /* For arrays, $ will either be a compile-time constant
@@ -1384,9 +1461,9 @@ Dsymbol *ArrayScopeSymbol::search(Loc loc, Identifier *ident, int flags)
                  * or a variable (in which case an expression is created in
                  * toir.c).
                  */
-                VoidInitializer *e = new VoidInitializer(0);
+                VoidInitializer *e = new VoidInitializer(Loc());
                 e->type = Type::tsize_t;
-                v->init = e;
+                v = new VarDeclaration(loc, Type::tsize_t, Id::dollar, e);
                 v->storage_class |= STCctfe; // it's never a true static variable
             }
             *pvar = v;

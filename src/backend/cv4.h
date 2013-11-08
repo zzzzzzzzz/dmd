@@ -124,3 +124,102 @@
 
 #define LF_VARSTRING    0x8010
 
+/************** Added Since CV4 *********************/
+
+#define LF_MODIFIER_V2          0x1001
+#define LF_POINTER_V2           0x1002
+#define LF_ARRAY_V2             0x1003
+#define LF_CLASS_V2             0x1004
+#define LF_STRUCTURE_V2         0x1005
+#define LF_UNION_V2             0x1006
+#define LF_ENUM_V2              0x1007
+#define LF_PROCEDURE_V2         0x1008
+#define LF_MFUNCTION_V2         0x1009
+#define LF_COBOL0_V2            0x100A
+#define LF_BARRAY_V2            0x100B
+#define LF_DIMARRAY_V2          0x100C
+#define LF_VFTPATH_V2           0x100D
+#define LF_PRECOMP_V2           0x100E
+#define LF_OEM_V2               0x100F
+
+#define LF_SKIP_V2              0x1200
+#define LF_ARGLIST_V2           0x1201
+#define LF_DEFARG_V2            0x1202
+#define LF_FIELDLIST_V2         0x1203
+#define LF_DERIVED_V2           0x1204
+#define LF_BITFIELD_V2          0x1205
+#define LF_METHODLIST_V2        0x1206
+#define LF_DIMCONU_V2           0x1207
+#define LF_DIMCONLU_V2          0x1208
+#define LF_DIMVARU_V2           0x1209
+#define LF_DIMVARLU_V2          0X120A
+
+#define LF_BCLASS_V2            0x1400
+#define LF_VBCLASS_V2           0x1401
+#define LF_IVBCLASS_V2          0x1402
+#define LF_FRIENDFCN_V2         0x1403
+#define LF_INDEX_V2             0x1404
+#define LF_MEMBER_V2            0x1405
+#define LF_STMEMBER_V2          0x1406
+#define LF_METHOD_V2            0x1407
+#define LF_NESTTYPE_V2          0x1408
+#define LF_VFUNCTAB_V2          0x1409
+#define LF_FRIENDCLS_V2         0x140A
+#define LF_ONEMETHOD_V2         0x140B
+#define LF_VFUNCOFF_V2          0x140C
+#define LF_NESTTYPEEX_V2        0x140D
+
+#define LF_ENUMERATE_V3         0x1502
+#define LF_ARRAY_V3             0x1503
+#define LF_CLASS_V3             0x1504
+#define LF_STRUCTURE_V3         0x1505
+#define LF_UNION_V3             0x1506
+#define LF_ENUM_V3              0x1507
+#define LF_MEMBER_V3            0x150D
+#define LF_STMEMBER_V3          0x150E
+#define LF_METHOD_V3            0x150F
+#define LF_NESTTYPE_V3          0x1510
+#define LF_ONEMETHOD_V3         0x1511
+
+#define S_REGISTER_V2           0x1001
+#define S_CONSTANT_V2           0x1002
+#define S_UDT_V2                0x1003
+#define S_COBOLUDT_V2           0x1004
+#define S_MANYREG_V2            0x1005
+#define S_BPREL_V2              0x1006
+#define S_LDATA_V2              0x1007
+#define S_GDATA_V2              0x1008
+#define S_PUB_V2                0x1009
+#define S_LPROC_V2              0X100A
+#define S_GPROC_V2              0x100B
+#define S_VFTTABLE_V2           0x100C
+#define S_REGREL_V2             0x100D
+#define S_LTHREAD_V2            0x100E
+#define S_GTHREAD_V2            0x100F
+#define S_FUNCINFO_V2           0x1012
+#define S_COMPILAND_V2          0x1013
+
+#define S_COMPILAND_V3          0x1101
+#define S_THUNK_V3              0x1102
+#define S_BLOCK_V3              0x1103
+#define S_LABEL_V3              0x1105
+#define S_REGISTER_V3           0x1106
+#define S_CONSTANT_V3           0x1107
+#define S_UDT_V3                0x1108
+#define S_BPREL_V3              0x110B
+#define S_LDATA_V3              0x110C
+#define S_GDATA_V3              0x110D
+#define S_PUB_V3                0x110E
+#define S_LPROC_V3              0x110F
+#define S_GPROC_V3              0x1110
+#define S_BPREL_XXXX_V3         0x1111
+#define S_MSTOOL_V3             0x1116
+#define S_PUB_FUNC1_V3          0x1125
+#define S_PUB_FUNC2_V3          0x1127
+#define S_SECTINFO_V3           0x1136
+#define S_SUBSECTINFO_V3        0x1137
+#define S_ENTRYPOINT_V3         0x1138
+#define S_SECUCOOKIE_V3         0x113A
+#define S_MSTOOLINFO_V3         0x113C
+#define S_MSTOOLENV_V3          0x113D
+

@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -644,9 +643,10 @@ void cgreg_map(Symbol *s, unsigned regmsw, unsigned reglsw)
             {
                 case SCauto:
                 case SCregister:
-                case SCtmp:
-                case SCfastpar:
                     s->Sfl = FLauto;
+                    break;
+                case SCfastpar:
+                    s->Sfl = FLfast;
                     break;
                 case SCbprel:
                     s->Sfl = FLbprel;
@@ -772,9 +772,10 @@ int cgreg_assign(Symbol *retsym)
                 {
                     case SCauto:
                     case SCregister:
-                    case SCtmp:
-                    case SCfastpar:
                         s->Sfl = FLauto;
+                        break;
+                    case SCfastpar:
+                        s->Sfl = FLfast;
                         break;
                     case SCbprel:
                         s->Sfl = FLbprel;

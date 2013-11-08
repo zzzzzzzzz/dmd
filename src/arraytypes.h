@@ -64,6 +64,8 @@ typedef ArrayBase<struct CompoundStatement> CompoundStatements;
 
 typedef ArrayBase<struct GotoCaseStatement> GotoCaseStatements;
 
+typedef ArrayBase<struct ReturnStatement> ReturnStatements;
+
 typedef ArrayBase<struct TemplateInstance> TemplateInstances;
 
 //typedef ArrayBase<char> Strings;
@@ -74,4 +76,5 @@ typedef ArrayBase<struct block> Blocks;
 
 typedef ArrayBase<struct Symbol> Symbols;
 
+typedef ArrayBase<struct dt_t> Dts;
 #endif

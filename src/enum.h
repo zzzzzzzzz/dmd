@@ -22,7 +22,7 @@ struct Identifier;
 struct Type;
 struct Expression;
 struct HdrGenState;
-
+struct VarDeclaration;
 
 struct EnumDeclaration : ScopeDsymbol
 {   /* enum ident : memtype { ... }
@@ -40,15 +40,14 @@ struct EnumDeclaration : ScopeDsymbol
     Expression *minval;
     Expression *defaultval;     // default initializer
 #endif
-    int isdeprecated;
+    bool isdeprecated;
     int isdone;                 // 0: not done
                                 // 1: semantic() successfully completed
-#ifdef IN_GCC
-    Expressions *attributes;    // GCC decl/type attributes
-#endif
 
     EnumDeclaration(Loc loc, Identifier *id, Type *memtype);
     Dsymbol *syntaxCopy(Dsymbol *s);
+    int addMember(Scope *sc, ScopeDsymbol *sd, int memnum);
+    void setScope(Scope *sc);
     void semantic0(Scope *sc);
     void semantic(Scope *sc);
     int oneMember(Dsymbol **ps, Identifier *ident = NULL);
@@ -58,14 +57,15 @@ struct EnumDeclaration : ScopeDsymbol
 #if DMDV2
     Dsymbol *search(Loc, Identifier *ident, int flags);
 #endif
-    int isDeprecated();                 // is Dsymbol deprecated?
+    bool isDeprecated();                // is Dsymbol deprecated?
 
     void emitComment(Scope *sc);
-    void toJsonBuffer(OutBuffer *buf);
-    void toDocBuffer(OutBuffer *buf);
+    void toJson(JsonOut *json);
+    void toDocBuffer(OutBuffer *buf, Scope *sc);
 
     EnumDeclaration *isEnumDeclaration() { return this; }
 
+    bool objFileDone;  // if toObjFile was already called
     void toObjFile(int multiobj);                       // compile to .obj file
     void toDebug();
     int cvMember(unsigned char *p);
@@ -77,17 +77,21 @@ struct EnumDeclaration : ScopeDsymbol
 
 struct EnumMember : Dsymbol
 {
+    EnumDeclaration *ed;
     Expression *value;
     Type *type;
+    VarDeclaration *vd;
 
     EnumMember(Loc loc, Identifier *id, Expression *value, Type *type);
     Dsymbol *syntaxCopy(Dsymbol *s);
     void toCBuffer(OutBuffer *buf, HdrGenState *hgs);
     const char *kind();
+    void semantic(Scope *sc);
+    Expression *getVarExp(Loc loc, Scope *sc);
 
     void emitComment(Scope *sc);
-    void toJsonBuffer(OutBuffer *buf);
-    void toDocBuffer(OutBuffer *buf);
+    void toJson(JsonOut *json);
+    void toDocBuffer(OutBuffer *buf, Scope *sc);
 
     EnumMember *isEnumMember() { return this; }
 };

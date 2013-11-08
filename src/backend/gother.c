@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -400,6 +399,15 @@ STATIC void chkrd(elem *n,list_t rdlist)
         if (sv->Stype->Ttag->Sstruct->Sflags & (STRbitfields | STR0size))
             return;
     }
+#if 0
+    // If variable is zero length static array, don't print message.
+    // BUG: Suppress error even if variable is initialized with void.
+    if (sv->Stype->Tty == TYarray && sv->Stype->Tdim == 0)
+    {
+        printf("sv->Sident = %s\n", sv->Sident);
+        return;
+    }
+#endif
 #if SCPP
     {   Outbuffer buf;
         char *p2;
@@ -1031,7 +1039,7 @@ STATIC void cpwalk(register elem *n,vec_t IN)
 
                 /* If this is a copy elem in expnod[]   */
                 /*      Set bit in IN.                  */
-                if (op == OPeq && n->E1->Eoper == OPvar &&
+                if ((op == OPeq || op == OPstreq) && n->E1->Eoper == OPvar &&
                     n->E2->Eoper == OPvar && n->Eexp)
                         vec_setbit(n->Eexp,IN);
         }
@@ -1039,18 +1047,25 @@ STATIC void cpwalk(register elem *n,vec_t IN)
         {       symbol *v = n->EV.sp.Vsym;
                 symbol *f;
                 elem *foundelem = NULL;
-                unsigned sz;
                 tym_t ty;
 
                 //dbg_printf("Checking copyprop for '%s', ty=x%x\n",v->Sident,n->Ety);
                 symbol_debug(v);
                 ty = n->Ety;
-                sz = tysize(n->Ety);
+                unsigned sz = tysize(n->Ety);
+                if (sz == -1 && !tyfunc(n->Ety))
+                    sz = type_size(v->Stype);
+
                 foreach(i,exptop,IN)    /* for all active copy elems    */
                 {       elem *c;
 
                         c = expnod[i];
                         assert(c);
+
+                        unsigned csz = tysize(c->E1->Ety);
+                        if (c->Eoper == OPstreq)
+                            csz = type_size(c->ET);
+                        assert((int)csz >= 0);
 
                         //dbg_printf("looking at: ("); WReqn(c); dbg_printf("), ty=x%x\n",c->E1->Ety);
                         /* Not only must symbol numbers match, but      */
@@ -1058,7 +1073,7 @@ STATIC void cpwalk(register elem *n,vec_t IN)
                         /* (in case of unions).                         */
                         if (v == c->E1->EV.sp.Vsym &&
                             n->EV.sp.Voffset == c->E1->EV.sp.Voffset &&
-                            sz <= tysize(c->E1->Ety))
+                            sz <= csz)
                         {       if (foundelem)
                                 {       if (c->E2->EV.sp.Vsym != f)
                                                 goto noprop;
@@ -1074,8 +1089,12 @@ STATIC void cpwalk(register elem *n,vec_t IN)
                         cmes3("Copyprop, from '%s' to '%s'\n",
                             (v->Sident) ? (char *)v->Sident : "temp",
                             (f->Sident) ? (char *)f->Sident : "temp");
+
+                        type *nt = n->ET;
                         el_copy(n,foundelem->E2);
                         n->Ety = ty;    // retain original type
+                        n->ET = nt;
+
                         changes++;
 
                         // Mark ones we can no longer use
@@ -1184,7 +1203,10 @@ void elimass(elem *n)
 {   elem *e1;
 
     switch (n->Eoper)
-    {   case OPeq:
+    {
+        case OPvecsto:
+            n->E2->Eoper = OPcomma;
+        case OPeq:
         case OPstreq:
             /* (V=e) => (random constant,e)     */
             /* Watch out for (a=b=c) stuff!     */
@@ -1331,11 +1353,15 @@ STATIC void accumda(elem *n,vec_t DEAD, vec_t POSS)
 
                     ti = Elvalue(assnod[i]);
                     if (v == ti->EV.sp.Vsym &&
-                        // If symbol references overlap
-                        voff + vsize > ti->EV.sp.Voffset &&
-                        ti->EV.sp.Voffset + tysize(ti->Ety) > voff
+                        ((vsize == -1 || tysize(ti->Ety) == -1) ||
+                         // If symbol references overlap
+                         (voff + vsize > ti->EV.sp.Voffset &&
+                          ti->EV.sp.Voffset + tysize(ti->Ety) > voff)
+                        )
                        )
+                    {
                         vec_clearbit(i,POSS);
+                    }
                 }
                 break;
             }
@@ -1395,7 +1421,7 @@ STATIC void accumda(elem *n,vec_t DEAD, vec_t POSS)
                         accumda(n->E2,DEAD,POSS);
                     t = Elvalue(n);
                     // if not (v = expression) then gen refs of left tree
-                    if (op != OPeq)
+                    if (op != OPeq && op != OPstreq)
                         accumda(n->E1,DEAD,POSS);
                     else if (OTunary(t->Eoper))         // if (*e = expression)
                         accumda(t->E1,DEAD,POSS);
@@ -1408,21 +1434,29 @@ STATIC void accumda(elem *n,vec_t DEAD, vec_t POSS)
 
                     // if unambiguous assignment, post all possibilities
                     // to DEAD
-                    if (op == OPeq && t->Eoper == OPvar)
+                    if ((op == OPeq || op == OPstreq) && t->Eoper == OPvar)
                     {
+                        unsigned tsz = tysize(t->Ety);
+                        if (n->Eoper == OPstreq)
+                            tsz = type_size(n->ET);
                         for (i = 0; i < assnum; i++)
-                        {   register elem *ti;
+                        {   elem *ti = Elvalue(assnod[i]);
 
-                            ti = Elvalue(assnod[i]);
+                            unsigned tisz = tysize(ti->Ety);
+                            if (assnod[i]->Eoper == OPstreq)
+                                tisz = type_size(assnod[i]->ET);
+
                             // There may be some problem with this next
                             // statement with unions.
                             if (ti->EV.sp.Vsym == t->EV.sp.Vsym &&
                                 ti->EV.sp.Voffset == t->EV.sp.Voffset &&
-                                tysize(ti->Ety) == tysize(t->Ety) &&
+                                tisz == tsz &&
                                 !(t->Ety & mTYvolatile) &&
                                 //t->EV.sp.Vsym->Sflags & SFLunambig &&
                                 vec_testbit(i,POSS))
+                            {
                                     vec_setbit(i,DEAD);
+                            }
                         }
                     }
 

@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -36,7 +35,7 @@ Outbuffer::Outbuffer()
     inc = 0;
 }
 
-Outbuffer::Outbuffer(unsigned bufinc)
+Outbuffer::Outbuffer(size_t bufinc)
 {
     buf = NULL;
     pend = NULL;
@@ -61,11 +60,11 @@ void Outbuffer::reset()
 }
 
 // Reserve nbytes in buffer
-void Outbuffer::reserve(unsigned nbytes)
+void Outbuffer::reserve(size_t nbytes)
 {
     if (pend - p < nbytes)
-    {   unsigned oldlen = len;
-        unsigned used = p - buf;
+    {   size_t oldlen = len;
+        size_t used = p - buf;
 
         if (inc > nbytes)
         {
@@ -106,9 +105,9 @@ void Outbuffer::reserve(unsigned nbytes)
 //
 //      If data will append to buffer
 //              position for write and return new size
-int Outbuffer::position(unsigned pos, unsigned nbytes)
+size_t Outbuffer::position(size_t pos, size_t nbytes)
 {
-    int current_sz = size();
+    size_t current_sz = size();
     unsigned char *fend = buf+pos+nbytes;       // future end of buffer
     if (fend >= pend)
     {
@@ -119,7 +118,7 @@ int Outbuffer::position(unsigned pos, unsigned nbytes)
 }
 
 // Write an array to the buffer.
-void Outbuffer::write(const void *b, int len)
+void Outbuffer::write(const void *b, size_t len)
 {
     if (pend - p < len)
         reserve(len);
@@ -128,7 +127,7 @@ void Outbuffer::write(const void *b, int len)
 }
 
 // Write n zeros to the buffer.
-void *Outbuffer::writezeros(unsigned len)
+void *Outbuffer::writezeros(size_t len)
 {
     if (pend - p < len)
         reserve(len);
@@ -226,11 +225,14 @@ void Outbuffer::writeString(const char *s)
 
 void Outbuffer::prependBytes(const char *s)
 {
-    size_t len = strlen(s);
+    prepend(s, strlen(s));
+}
 
+void Outbuffer::prepend(const void *b, size_t len)
+{
     reserve(len);
     memmove(buf + len,buf,p - buf);
-    memcpy(buf,s,len);
+    memcpy(buf,b,len);
     p += len;
 }
 
@@ -262,7 +264,7 @@ char *Outbuffer::toString()
  * Set current size of buffer.
  */
 
-void Outbuffer::setsize(unsigned size)
+void Outbuffer::setsize(size_t size)
 {
     p = buf + size;
 }

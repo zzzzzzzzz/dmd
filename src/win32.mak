@@ -56,6 +56,7 @@
 # install       - copy build targets to install directory
 # install-clean - delete all files in the install directory
 # zip           - create ZIP archive of source code
+# scp		- copy source files to another directory
 #
 # dmd           - release dmd (legacy target)
 # debdmd        - debug dmd
@@ -82,6 +83,8 @@ CPPUNIT=cppunit-1.12.1
 INCLUDE=$(ROOT);$(DMCROOT)\include
 # Install directory
 INSTALL=..\install
+# Where scp command copies to
+SCPDIR=..\backup
 
 ##### Tools
 
@@ -105,6 +108,10 @@ DETAB=detab
 TOLF=tolf
 # Zip
 ZIP=zip32
+# Copy to another directory
+SCP=$(CP)
+# PVS-Studio command line executable
+PVS="c:\Program Files (x86)\PVS-Studio\x64\PVS-Studio"
 
 ##### User configuration switches
 
@@ -141,60 +148,73 @@ DMDMAKE=$(MAKE) -fwin32.mak C=$C TK=$(TK) ROOT=$(ROOT)
 ############################### Rule Variables ###############################
 
 # D front end
-OBJ1= mars.obj enum.obj struct.obj dsymbol.obj import.obj id.obj \
+# mars.obj
+FRONTOBJ= enum.obj struct.obj dsymbol.obj import.obj id.obj \
 	staticassert.obj identifier.obj mtype.obj expression.obj \
 	optimize.obj template.obj lexer.obj declaration.obj cast.obj \
 	init.obj func.obj utf.obj parse.obj statement.obj \
-	constfold.obj version.obj inifile.obj typinf.obj \
+	constfold.obj version.obj inifile.obj \
 	module.obj scope.obj dump.obj cond.obj inline.obj opover.obj \
 	entity.obj class.obj mangle.obj attrib.obj impcnvtab.obj \
 	link.obj access.obj doc.obj macro.obj hdrgen.obj delegatize.obj \
-	interpret.obj traits.obj aliasthis.obj intrange.obj \
-	builtin.obj clone.obj libomf.obj arrayop.obj irstate.obj \
-	glue.obj msc.obj ph.obj tk.obj s2ir.obj todt.obj e2ir.obj tocsym.obj \
-	util.obj eh.obj toobj.obj toctype.obj tocvdebug.obj toir.obj \
-	json.obj unittests.obj imphint.obj argtypes.obj apply.obj canthrow.obj \
-	sideeffect.obj libmscoff.obj scanmscoff.obj
+	interpret.obj ctfeexpr.obj traits.obj aliasthis.obj \
+	builtin.obj clone.obj arrayop.obj \
+	json.obj unittests.obj imphint.obj argtypes.obj apply.obj sapply.obj \
+	sideeffect.obj intrange.obj canthrow.obj target.obj
+
+# Glue layer
+GLUEOBJ=glue.obj msc.obj s2ir.obj todt.obj e2ir.obj tocsym.obj \
+	toobj.obj toctype.obj tocvdebug.obj toir.obj \
+	libmscoff.obj scanmscoff.obj irstate.obj typinf.obj \
+	libomf.obj scanomf.obj iasm.obj
+
+#GLUEOBJ=gluestub.obj
 
 # D back end
-OBJ8= go.obj gdag.obj gother.obj gflow.obj gloop.obj var.obj el.obj \
+BACKOBJ= go.obj gdag.obj gother.obj gflow.obj gloop.obj var.obj el.obj \
 	newman.obj glocal.obj os.obj nteh.obj evalu8.obj cgcs.obj \
 	rtlsym.obj cgelem.obj cgen.obj cgreg.obj out.obj \
 	blockopt.obj cgobj.obj cg.obj cgcv.obj type.obj dt.obj \
 	debug.obj code.obj cg87.obj cgxmm.obj cgsched.obj ee.obj csymbol.obj \
 	cgcod.obj cod1.obj cod2.obj cod3.obj cod4.obj cod5.obj outbuf.obj \
-	bcomplex.obj iasm.obj ptrntab.obj aa.obj ti_achar.obj md5.obj \
-	ti_pvoid.obj mscoffobj.obj
+	bcomplex.obj ptrntab.obj aa.obj ti_achar.obj md5.obj \
+	ti_pvoid.obj mscoffobj.obj pdata.obj cv8.obj backconfig.obj \
+	divcoeff.obj \
+	ph2.obj util2.obj eh.obj tk.obj \
+
 
 # Root package
 GCOBJS=rmem.obj
 # Removed garbage collector (look in history)
 #GCOBJS=dmgcmem.obj bits.obj win32.obj gc.obj
-ROOTOBJS= array.obj gnuc.obj man.obj root.obj port.obj \
+ROOTOBJS= array.obj man.obj root.obj port.obj \
 	stringtable.obj response.obj async.obj speller.obj aav.obj \
 	$(GCOBJS)
-
-# All objects
-OBJS= $(OBJ1) $(OBJ8) $(ROOTOBJS)
 
 # D front end
 SRCS= mars.c enum.c struct.c dsymbol.c import.c idgen.c impcnvgen.c utf.h \
 	utf.c entity.c identifier.c mtype.c expression.c optimize.c \
 	template.h template.c lexer.c declaration.c cast.c \
 	cond.h cond.c link.c aggregate.h staticassert.h parse.c statement.c \
-	constfold.c version.h version.c inifile.c iasm.c staticassert.c \
+	constfold.c version.h version.c inifile.c staticassert.c \
 	module.c scope.c dump.c init.h init.c attrib.h attrib.c opover.c \
-	eh.c toctype.c class.c mangle.c tocsym.c func.c inline.c \
-	access.c complex_t.h irstate.h irstate.c glue.c msc.c \
-	ph.c tk.c s2ir.c todt.c e2ir.c util.c toobj.c cppmangle.c \
-	identifier.h parse.h scope.h enum.h import.h intrange.h \
-	typinf.c tocvdebug.c toelfdebug.c mars.h module.h mtype.h dsymbol.h \
+	class.c mangle.c func.c inline.c access.c complex_t.h cppmangle.c \
+	identifier.h parse.h scope.h enum.h import.h \
+	mars.h module.h mtype.h dsymbol.h \
 	declaration.h lexer.h expression.h statement.h doc.h doc.c \
 	macro.h macro.c hdrgen.h hdrgen.c arraytypes.h \
-	delegatize.c toir.h toir.c interpret.c traits.c builtin.c \
-	clone.c lib.h libomf.c libelf.c libmach.c arrayop.c intrange.c \
+	delegatize.c interpret.c ctfeexpr.c traits.c builtin.c \
+	clone.c lib.h arrayop.c \
 	aliasthis.h aliasthis.c json.h json.c unittests.c imphint.c argtypes.c \
-	apply.c canthrow.c sideeffect.c libmscoff.c scanmscoff.c
+	apply.c sapply.c sideeffect.c ctfe.h \
+	intrange.h intrange.c canthrow.c target.c target.h
+
+# Glue layer
+GLUESRC= glue.c msc.c s2ir.c todt.c e2ir.c tocsym.c \
+	toobj.c toctype.c tocvdebug.c toir.h toir.c \
+	libmscoff.c scanmscoff.c irstate.c typinf.c iasm.c \
+	toelfdebug.c libomf.c scanomf.c libelf.c scanelf.c libmach.c scanmach.c \
+	tk.c eh.c gluestub.c
 
 # D back end
 BACKSRC= $C\cdef.h $C\cc.h $C\oper.h $C\ty.h $C\optabgen.c \
@@ -214,24 +234,27 @@ BACKSRC= $C\cdef.h $C\cc.h $C\oper.h $C\ty.h $C\optabgen.c \
 	$C\elfobj.c $C\cv4.h $C\dwarf2.h $C\exh.h $C\go.h \
 	$C\dwarf.c $C\dwarf.h $C\cppman.c $C\machobj.c \
 	$C\strtold.c $C\aa.h $C\aa.c $C\tinfo.h $C\ti_achar.c \
-	$C\md5.h $C\md5.c $C\ti_pvoid.c $C\xmm.h \
-	$C\mscoffobj.c $C\obj.h \
+	$C\md5.h $C\md5.c $C\ti_pvoid.c $C\xmm.h $C\ph2.c $C\util2.c \
+	$C\mscoffobj.c $C\obj.h $C\pdata.c $C\cv8.c $C\backconfig.c \
+	$C\divcoeff.c \
 	$C\backend.txt
 
 # Toolkit
-TKSRC= $(TK)\filespec.h $(TK)\mem.h $(TK)\list.h $(TK)\vec.h \
-	$(TK)\filespec.c $(TK)\mem.c $(TK)\vec.c $(TK)\list.c
+TKSRCC=	$(TK)\filespec.c $(TK)\mem.c $(TK)\vec.c $(TK)\list.c
+TKSRC= $(TK)\filespec.h $(TK)\mem.h $(TK)\list.h $(TK)\vec.h $(TKSRCC)
 
 # Root package
-ROOTSRC= $(ROOT)\root.h $(ROOT)\root.c $(ROOT)\array.c \
-	$(ROOT)\rmem.h $(ROOT)\rmem.c $(ROOT)\port.h \
-	$(ROOT)\stringtable.h $(ROOT)\stringtable.c \
-	$(ROOT)\gnuc.h $(ROOT)\gnuc.c $(ROOT)\man.c $(ROOT)\port.c \
-	$(ROOT)\response.c $(ROOT)\async.h $(ROOT)\async.c \
-	$(ROOT)\speller.h $(ROOT)\speller.c \
-	$(ROOT)\aav.h $(ROOT)\aav.c \
-	$(ROOT)\longdouble.h $(ROOT)\longdouble.c \
-	$(ROOT)\dmgcmem.c
+ROOTSRCC=$(ROOT)\root.c $(ROOT)\array.c $(ROOT)\rmem.c $(ROOT)\stringtable.c \
+	$(ROOT)\man.c $(ROOT)\port.c $(ROOT)\async.c $(ROOT)\response.c \
+	$(ROOT)\speller.c $(ROOT)\aav.c $(ROOT)\longdouble.c $(ROOT)\dmgcmem.c
+ROOTSRC= $(ROOT)\root.h \
+	$(ROOT)\rmem.h $(ROOT)\port.h \
+	$(ROOT)\stringtable.h \
+	$(ROOT)\async.h \
+	$(ROOT)\speller.h \
+	$(ROOT)\aav.h \
+	$(ROOT)\longdouble.h \
+	$(ROOTSRCC)
 # Removed garbage collector bits (look in history)
 #	$(ROOT)\gc\bits.c $(ROOT)\gc\gc.c $(ROOT)\gc\gc.h $(ROOT)\gc\mscbitops.h \
 #	$(ROOT)\gc\bits.h $(ROOT)\gc\gccbitops.h $(ROOT)\gc\linux.c $(ROOT)\gc\os.h \
@@ -269,8 +292,24 @@ reldmd:
 trace:
 	$(DMDMAKE) "OPT=-o" "DEBUG=-gt -Nc" "LFLAGS=-L/ma/co/delexe" $(TARGETEXE)
 
-$(TARGETEXE): $(OBJS) win32.mak
-	$(CC) -o$(TARGETEXE) $(OBJS) -cpp -mn -Ar $(LFLAGS)
+################################ Libraries ##################################
+
+frontend.lib : $(FRONTOBJ)
+	$(LIB) -p512 -c frontend.lib $(FRONTOBJ)
+
+glue.lib : $(GLUEOBJ)
+	$(LIB) -p512 -c glue.lib $(GLUEOBJ)
+
+backend.lib : $(BACKOBJ)
+	$(LIB) -p512 -c backend.lib $(BACKOBJ)
+
+root.lib : $(ROOTOBJS)
+	$(LIB) -p512 -c root.lib $(ROOTOBJS)
+
+LIBS= frontend.lib glue.lib backend.lib root.lib
+
+$(TARGETEXE): mars.obj $(LIBS) win32.mak
+	$(CC) -o$(TARGETEXE) mars.obj $(LIBS) -cpp -mn -Ar $(LFLAGS)
 
 ################################ Unit Tests ##################################
 
@@ -298,6 +337,8 @@ clean:
 	$(DEL) msgs.h msgs.c
 	$(DEL) elxxx.c cdxxx.c optab.c debtab.c fltables.c tytab.c
 	$(DEL) impcnvtab.c
+	$(DEL) id.h id.c
+	$(DEL) verstr.h
 	cd $(CPPUNIT)\src\cppunit
 	$(MAKE) clean
 
@@ -312,6 +353,7 @@ install-copy:
 	$(CP) $(TARGETEXE)          $(INSTALL)\windows\bin\$(TARGETEXE)
 	$(CP) phobos\phobos.lib     $(INSTALL)\windows\lib\phobos.lib
 	$(CP) $(SRCS)               $(INSTALL)\src\dmd
+	$(CP) $(GLUESRC)            $(INSTALL)\src\dmd
 	$(CP) $(ROOTSRC)            $(INSTALL)\src\dmd\root
 	$(CP) $(TKSRC)              $(INSTALL)\src\dmd\tk
 	$(CP) $(BACKSRC)            $(INSTALL)\src\dmd\backend
@@ -326,18 +368,38 @@ install-clean:
 	$(RD) /s/q $(INSTALL)
 
 detab:
-	$(DETAB) $(SRCS) $(ROOTSRC) $(TKSRC) $(BACKSRC)
+	$(DETAB) $(SRCS) $(GLUESRC) $(ROOTSRC) $(TKSRC) $(BACKSRC)
 
 tolf:
-	$(TOLF) $(SRCS) $(ROOTSRC) $(TKSRC) $(BACKSRC) $(MAKEFILES)
+	$(TOLF) $(SRCS) $(GLUESRC) $(ROOTSRC) $(TKSRC) $(BACKSRC) $(MAKEFILES)
 
 zip: detab tolf $(MAKEFILES)
 	$(DEL) dmdsrc.zip
 	$(ZIP) dmdsrc $(MAKEFILES)
 	$(ZIP) dmdsrc $(SRCS)
+	$(ZIP) dmdsrc $(GLUESRC)
 	$(ZIP) dmdsrc $(BACKSRC)
 	$(ZIP) dmdsrc $(TKSRC)
 	$(ZIP) dmdsrc $(ROOTSRC)
+
+scp: detab tolf $(MAKEFILES)
+	$(SCP) $(MAKEFILES) $(SCPDIR)/src
+	$(SCP) $(SRCS) $(SCPDIR)/src
+	$(SCP) $(GLUESRC) $(SCPDIR)/src
+	$(SCP) $(BACKSRC) $(SCPDIR)/src/backend
+	$(SCP) $(TKSRC) $(SCPDIR)/src/tk
+	$(SCP) $(ROOTSRC) $(SCPDIR)/src/root
+
+pvs:
+#	$(PVS) --cfg PVS-Studio.cfg --cl-params /I$(ROOT) /Tp canthrow.c --source-file canthrow.c
+#	$(PVS) --cfg PVS-Studio.cfg --cl-params /I$(ROOT) /I$C /I$(TK) /Tp scanmscoff.c --source-file scanmscoff.c
+	$(PVS) --cfg PVS-Studio.cfg --cl-params /DMARS /DDM_TARGET_CPU_X86 /I$C /I$(TK) /I$(ROOT) /Tp $C\cod3.c --source-file $C\cod3.c
+#	$(PVS) --cfg PVS-Studio.cfg --cl-params /I$(ROOT) /Tp $(SRCS) --source-file $(SRCS)
+#	$(PVS) --cfg PVS-Studio.cfg --cl-params /I$(ROOT) /Tp $(GLUESRC) --source-file $(GLUESRC)
+#	$(PVS) --cfg PVS-Studio.cfg --cl-params /I$(ROOT) /Tp $(ROOTSRCC) --source-file $(ROOTSRCC)
+#	$(PVS) --cfg PVS-Studio.cfg --cl-params /I$C;$(TK) /Tp $(BACKSRC) --source-file $(BACKSRC)
+#	$(PVS) --cfg PVS-Studio.cfg --cl-params /I$(TK) /Tp $(TKSRCC) --source-file $(TKSRCC)
+
 
 ############################## Generated Source ##############################
 
@@ -353,6 +415,9 @@ impcnvtab.c : impcnvgen.c
 id.h id.c : idgen.c
 	$(CC) -cpp -DDM_TARGET_CPU_X86=1 idgen
 	idgen
+
+verstr.h : ..\VERSION
+	echo "$(..\VERSION)" >verstr.h
 
 ############################# Intermediate Rules ############################
 
@@ -383,6 +448,9 @@ bcomplex.obj : $C\bcomplex.c
 
 aa.obj : $C\tinfo.h $C\aa.h $C\aa.c
 	$(CC) -c $(MFLAGS) -I. $C\aa
+
+backconfig.obj : $C\backconfig.c
+	$(CC) -c $(MFLAGS) $C\backconfig
 
 blockopt.obj : $C\blockopt.c
 	$(CC) -c $(MFLAGS) $C\blockopt
@@ -444,8 +512,14 @@ irstate.obj : irstate.h irstate.c
 csymbol.obj : $C\symbol.c
 	$(CC) -c $(MFLAGS) $C\symbol -ocsymbol.obj
 
+cv8.obj : $C\cv8.c
+	$(CC) -c $(MFLAGS) $C\cv8
+
 debug.obj : $C\debug.c
 	$(CC) -c $(MFLAGS) -I. $C\debug
+
+divcoeff.obj : $C\divcoeff.c
+	$(CC) -c -cpp -e $(DEBUG) $C\divcoeff
 
 dt.obj : $C\dt.h $C\dt.c
 	$(CC) -c $(MFLAGS) $C\dt
@@ -483,10 +557,13 @@ gloop.obj : $C\gloop.c
 glue.obj : $(CH) $(TOTALH) $C\rtlsym.h mars.h module.h glue.c
 	$(CC) -c $(MFLAGS) -I$(ROOT) glue
 
+gluestub.obj : $(CH) $(TOTALH) $C\rtlsym.h mars.h module.h gluestub.c
+	$(CC) -c $(MFLAGS) -I$(ROOT) gluestub
+
 imphint.obj : imphint.c
 	$(CC) -c $(CFLAGS) $*
 
-mars.obj : $(TOTALH) module.h mars.h mars.c
+mars.obj : $(TOTALH) module.h mars.h mars.c verstr.h
 	$(CC) -c $(CFLAGS) $(PREC) $* -Ae
 
 md5.obj : $C\md5.h $C\md5.c
@@ -516,8 +593,11 @@ out.obj : $C\out.c
 outbuf.obj : $C\outbuf.h $C\outbuf.c
 	$(CC) -c $(MFLAGS) $C\outbuf
 
-ph.obj : ph.c
-	$(CC) -c $(MFLAGS) ph
+pdata.obj : $C\pdata.c
+	$(CC) -c $(MFLAGS) $C\pdata
+
+ph2.obj : $C\ph2.c
+	$(CC) -c $(MFLAGS) $C\ph2
 
 ptrntab.obj : $C\iasm.h $C\ptrntab.c
 	$(CC) -c $(MFLAGS) $C\ptrntab
@@ -567,8 +647,8 @@ tocsym.obj : $(CH) $(TOTALH) mars.h module.h tocsym.c
 unittests.obj : $(TOTALH) unittests.c
 	$(CC) -c $(CFLAGS) $(PREC) $*
 
-util.obj : util.c
-	$(CC) -c $(MFLAGS) util
+util2.obj : $C\util2.c
+	$(CC) -c $(MFLAGS) $C\util2
 
 var.obj : $C\var.c optab.c
 	$(CC) -c $(MFLAGS) -I. $C\var
@@ -589,9 +669,6 @@ async.obj : $(ROOT)\async.h $(ROOT)\async.c
 
 dmgcmem.obj : $(ROOT)\dmgcmem.c
 	$(CC) -c $(CFLAGS) $(ROOT)\dmgcmem.c
-
-gnuc.obj : $(ROOT)\gnuc.c
-	$(CC) -c $(CFLAGS) $(ROOT)\gnuc.c
 
 man.obj : $(ROOT)\man.c
 	$(CC) -c $(CFLAGS) $(ROOT)\man.c
@@ -655,7 +732,8 @@ import.obj : $(TOTALH) dsymbol.h import.h import.c
 inifile.obj : $(TOTALH) inifile.c
 init.obj : $(TOTALH) init.h init.c
 inline.obj : $(TOTALH) inline.c
-interpret.obj : $(TOTALH) interpret.c declaration.h expression.h
+interpret.obj : $(TOTALH) interpret.c declaration.h expression.h ctfe.h
+ctfexpr.obj : $(TOTALH) ctfeexpr.c ctfe.h
 intrange.obj : $(TOTALH) intrange.h intrange.c
 json.obj : $(TOTALH) json.h json.c
 lexer.obj : $(TOTALH) lexer.c
@@ -667,11 +745,14 @@ mangle.obj : $(TOTALH) dsymbol.h declaration.h mangle.c
 opover.obj : $(TOTALH) expression.h opover.c
 optimize.obj : $(TOTALH) expression.h optimize.c
 parse.obj : $(TOTALH) attrib.h lexer.h parse.h parse.c
+sapply.obj : $(TOTALH) sapply.c
+scanomf.obj : $(TOTALH) lib.h scanomf.c
 scope.obj : $(TOTALH) scope.h scope.c
 sideeffect.obj : $(TOTALH) sideeffect.c
 statement.obj : $(TOTALH) statement.h statement.c expression.h
 staticassert.obj : $(TOTALH) staticassert.h staticassert.c
 struct.obj : $(TOTALH) identifier.h enum.h struct.c
+target.obj : $(TOTALH) target.c target.h
 traits.obj : $(TOTALH) traits.c
 dsymbol.obj : $(TOTALH) identifier.h dsymbol.h dsymbol.c
 mtype.obj : $(TOTALH) mtype.h mtype.c

@@ -1,5 +1,4 @@
 // Compiler implementation of the D programming language
-// utf.h
 // Copyright (c) 2003-2010 by Digital Mars
 // All Rights Reserved
 // written by Walter Bright
@@ -20,9 +19,6 @@ typedef unsigned short  utf16_t;
 /// A UTF-32 code unit
 typedef unsigned int    utf32_t;
 typedef utf32_t         dchar_t;
-
-namespace Unicode
-{
 
 static utf16_t const ALPHA_TABLE[][2] =
 {
@@ -102,8 +98,6 @@ extern char const UTF16_DECODE_TRUNCATED_SEQUENCE[];
 extern char const UTF16_DECODE_INVALID_SURROGATE[];
 extern char const UTF16_DECODE_UNPAIRED_SURROGATE[];
 extern char const UTF16_DECODE_INVALID_CODE_POINT[];
-
-}   // namespace Unicode
 
 /// \return true if \a c is a valid, non-private UTF-32 code point
 bool utf_isValidDchar(dchar_t c);

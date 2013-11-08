@@ -4,7 +4,6 @@
 // All Rights Reserved
 // written by Walter Bright
 // http://www.digitalmars.com
-// http://www.dsource.org/projects/dmd/browser/trunk/src/idgen.c
 // License for redistribution is by either the Artistic License
 // in artistic.txt, or the GNU General Public License in gnu.txt.
 // See the included readme.txt for details.
@@ -109,6 +108,9 @@ Msgtable msgtable[] =
 
     { "LINE", "__LINE__" },
     { "FILE", "__FILE__" },
+    { "MODULE", "__MODULE__" },
+    { "FUNCTION", "__FUNCTION__" },
+    { "PRETTY_FUNCTION", "__PRETTY_FUNCTION__" },
     { "DATE", "__DATE__" },
     { "TIME", "__TIME__" },
     { "TIMESTAMP", "__TIMESTAMP__" },
@@ -261,10 +263,10 @@ Msgtable msgtable[] =
     { "_ArrayEq" },
 
     // For pragma's
-    { "GNU_asm" },
     { "lib" },
     { "msg" },
     { "startaddress" },
+    { "mangle" }, 
 
     // For special functions
     { "tohash", "toHash" },
@@ -308,6 +310,8 @@ Msgtable msgtable[] =
     { "isArithmetic" },
     { "isAssociativeArray" },
     { "isFinalClass" },
+    { "isPOD" },
+    { "isNested" },
     { "isFloating" },
     { "isIntegral" },
     { "isScalar" },
@@ -323,6 +327,7 @@ Msgtable msgtable[] =
     { "isLazy" },
     { "hasMember" },
     { "identifier" },
+    { "getProtection" },
     { "parent" },
     { "getMember" },
     { "getOverloads" },
@@ -334,6 +339,7 @@ Msgtable msgtable[] =
     { "isSame" },
     { "compiles" },
     { "parameters" },
+    { "getAttributes" },
 };
 
 

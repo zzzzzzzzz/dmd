@@ -1,4 +1,3 @@
-// utf.c
 // Copyright (c) 2003-2012 by Digital Mars
 // All Rights Reserved
 // written by Walter Bright
@@ -19,9 +18,6 @@
 #include <assert.h>
 
 #include "utf.h"
-
-namespace
-{
 
 /* The following encodings are valid, except for the 5 and 6 byte
  * combinations:
@@ -52,11 +48,6 @@ const unsigned UTF8_STRIDE[256] =
     4,4,4,4,4,4,4,4,5,5,5,5,6,6,0xFF,0xFF,
 };
 
-}   // namespace
-
-namespace Unicode
-{
-
 // UTF-8 decoding errors
 char const UTF8_DECODE_OUTSIDE_CODE_SPACE[] = "Outside Unicode code space";
 char const UTF8_DECODE_TRUNCATED_SEQUENCE[] = "Truncated UTF-8 sequence";
@@ -69,10 +60,6 @@ char const UTF16_DECODE_TRUNCATED_SEQUENCE[]= "Truncated UTF-16 sequence";
 char const UTF16_DECODE_INVALID_SURROGATE[] = "Invalid low surrogate";
 char const UTF16_DECODE_UNPAIRED_SURROGATE[]= "Unpaired surrogate";
 char const UTF16_DECODE_INVALID_CODE_POINT[]= "Invalid code point decoded";
-
-}   // namespace Unicode
-
-using namespace Unicode;
 
 /// The Unicode code space is the range of code points [0x000000,0x10FFFF]
 /// except the UTF-16 surrogate pairs in the range [0xD800,0xDFFF]
@@ -230,7 +217,7 @@ const char *utf_decodeChar(utf8_t const *s, size_t len, size_t *pidx, dchar_t *p
     //printf("utf_decodeChar(s = %02x, %02x, %02x len = %d)\n", u, s[1], s[2], len);
 
     // Get expected sequence length
-    unsigned n = UTF8_STRIDE[u];
+    size_t n = UTF8_STRIDE[u];
     switch (n)
     {
     case 1:                             // ASCII

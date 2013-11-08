@@ -23,6 +23,7 @@
 #include "rmem.h"
 #include "root.h"
 #include "async.h"
+#include "target.h"
 
 #include "mars.h"
 #include "module.h"
@@ -40,18 +41,20 @@ long __cdecl __ehfilter(LPEXCEPTION_POINTERS ep);
 #endif
 
 
-int response_expand(int *pargc, char ***pargv);
+int response_expand(size_t *pargc, char ***pargv);
 void browse(const char *url);
-void getenv_setargv(const char *envvar, int *pargc, char** *pargv);
+void getenv_setargv(const char *envvar, size_t *pargc, char** *pargv);
 
 void obj_start(char *srcfile);
 void obj_end(Library *library, File *objfile);
 
 void printCtfePerformanceStats();
 
+static bool parse_arch(size_t argc, char** argv, bool is64bit);
+
 Global global;
 
-Global::Global()
+void Global::init()
 {
     mars_ext = "d";
     sym_ext  = "d";
@@ -65,7 +68,6 @@ Global::Global()
     obj_ext  = "obj";
 #elif TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
     obj_ext  = "o";
-#elif TARGET_NET
 #else
 #error "fix this"
 #endif
@@ -74,7 +76,6 @@ Global::Global()
     lib_ext  = "lib";
 #elif TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
     lib_ext  = "a";
-#elif TARGET_NET
 #else
 #error "fix this"
 #endif
@@ -90,13 +91,14 @@ Global::Global()
 #endif
 
     copyright = "Copyright (c) 1999-2012 by Digital Mars";
-    written = "written by Walter Bright"
-#if TARGET_NET
-    "\nMSIL back-end (alpha release) by Cristian L. Vlasceanu and associates.";
-#endif
+    written = "written by Walter Bright";
+    version = "v"
+#include "verstr.h"
     ;
-    version = "v2.061";
-    global.structalign = STRUCTALIGN_DEFAULT;
+
+    compiler.vendor = "Digital Mars D";
+
+    main_d = "__main.d";
 
     memset(&params, 0, sizeof(Param));
 }
@@ -192,33 +194,51 @@ void errorSupplemental(Loc loc, const char *format, ...)
     va_end( ap );
 }
 
-void verror(Loc loc, const char *format, va_list ap, const char *p1, const char *p2)
+void deprecation(Loc loc, const char *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    vdeprecation(loc, format, ap);
+
+    va_end( ap );
+}
+
+// Just print, doesn't care about gagging
+void verrorPrint(Loc loc, const char *header, const char *format, va_list ap,
+                const char *p1, const char *p2)
+{
+    char *p = loc.toChars();
+
+    if (*p)
+        fprintf(stderr, "%s: ", p);
+    mem.free(p);
+
+    fputs(header, stderr);
+    if (p1)
+        fprintf(stderr, "%s ", p1);
+    if (p2)
+        fprintf(stderr, "%s ", p2);
+#if _MSC_VER
+    // MS doesn't recognize %zu format
+    OutBuffer tmp;
+    tmp.vprintf(format, ap);
+    fprintf(stderr, "%s", tmp.toChars());
+#else
+    vfprintf(stderr, format, ap);
+#endif
+    fprintf(stderr, "\n");
+    fflush(stderr);
+}
+
+// header is "Error: " by default (see mars.h)
+void verror(Loc loc, const char *format, va_list ap,
+                const char *p1, const char *p2, const char *header)
 {
     if (!global.gag)
     {
-        char *p = loc.toChars();
-
-        if (*p)
-            fprintf(stdmsg, "%s: ", p);
-        mem.free(p);
-
-        fprintf(stdmsg, "Error: ");
-        if (p1)
-            fprintf(stdmsg, "%s ", p1);
-        if (p2)
-            fprintf(stdmsg, "%s ", p2);
-#if _MSC_VER
-        // MS doesn't recognize %zu format
-        OutBuffer tmp;
-        tmp.vprintf(format, ap);
-        fprintf(stdmsg, "%s", tmp.toChars());
-#else
-        vfprintf(stdmsg, format, ap);
-#endif
-        fprintf(stdmsg, "\n");
-        fflush(stdmsg);
+        verrorPrint(loc, header, format, ap, p1, p2);
         if (global.errors >= 20)        // moderate blizzard of cascading messages
-            fatal();
+                fatal();
 //halt();
     }
     else
@@ -232,46 +252,28 @@ void verror(Loc loc, const char *format, va_list ap, const char *p1, const char 
 void verrorSupplemental(Loc loc, const char *format, va_list ap)
 {
     if (!global.gag)
-    {
-        fprintf(stdmsg, "%s:        ", loc.toChars());
-#if _MSC_VER
-        // MS doesn't recognize %zu format
-        OutBuffer tmp;
-        tmp.vprintf(format, ap);
-        fprintf(stdmsg, "%s", tmp.toChars());
-#else
-        vfprintf(stdmsg, format, ap);
-#endif
-        fprintf(stdmsg, "\n");
-        fflush(stdmsg);
-    }
+        verrorPrint(loc, "       ", format, ap);
 }
 
 void vwarning(Loc loc, const char *format, va_list ap)
 {
     if (global.params.warnings && !global.gag)
     {
-        char *p = loc.toChars();
-
-        if (*p)
-            fprintf(stdmsg, "%s: ", p);
-        mem.free(p);
-
-        fprintf(stdmsg, "Warning: ");
-#if _MSC_VER
-        // MS doesn't recognize %zu format
-        OutBuffer tmp;
-        tmp.vprintf(format, ap);
-        fprintf(stdmsg, "%s", tmp.toChars());
-#else
-        vfprintf(stdmsg, format, ap);
-#endif
-        fprintf(stdmsg, "\n");
-        fflush(stdmsg);
+        verrorPrint(loc, "Warning: ", format, ap);
 //halt();
         if (global.params.warnings == 1)
             global.warnings++;  // warnings don't count if gagged
     }
+}
+
+void vdeprecation(Loc loc, const char *format, va_list ap,
+                const char *p1, const char *p2)
+{
+    static const char *header = "Deprecation: ";
+    if (global.params.useDeprecated == 0)
+        verror(loc, format, ap, p1, p2, header);
+    else if (global.params.useDeprecated == 2 && !global.gag)
+        verrorPrint(loc, header, format, ap, p1, p2);
 }
 
 /***************************************
@@ -310,11 +312,11 @@ void usage()
 #else
     const char fpic[] = "";
 #endif
-    printf("DMD%s D Compiler %s\n%s %s\n",
-        sizeof(size_t) == 4 ? "32" : "64",
+    printf("DMD%llu D Compiler %s\n%s %s\n",
+           (unsigned long long) sizeof(size_t) * 8,
         global.version, global.copyright, global.written);
     printf("\
-Documentation: http://www.dlang.org/index.html\n\
+Documentation: http://dlang.org/\n\
 Usage:\n\
   dmd files.d ... { -switch }\n\
 \n\
@@ -322,10 +324,13 @@ Usage:\n\
   @cmdfile       read arguments from cmdfile\n\
   -c             do not link\n\
   -cov           do code coverage analysis\n\
+  -cov=nnn       require at least %%nnn code coverage\n\
   -D             generate documentation\n\
   -Dddocdir      write documentation file to docdir directory\n\
   -Dffilename    write documentation file to filename\n\
-  -d             allow deprecated features\n\
+  -d             silently allow deprecated features\n\
+  -dw            show use of deprecated features as warnings (default)\n\
+  -de            show use of deprecated features as errors (halt compilation)\n\
   -debug         compile in debug code\n\
   -debug=level   compile in debug code <= level\n\
   -debug=ident   compile in debug code identified by ident\n\
@@ -335,6 +340,7 @@ Usage:\n\
 "  -g             add symbolic debug info\n\
   -gc            add symbolic debug info, pretend to be C\n\
   -gs            always emit stack frame\n\
+  -gx            add stack stomp code\n\
   -H             generate 'header' file\n\
   -Hddirectory   write 'header' file to directory\n\
   -Hffilename    write 'header' file to filename\n\
@@ -349,24 +355,24 @@ Usage:\n\
 "  -m32           generate 32 bit code\n\
   -m64           generate 64 bit code\n"
 #endif
-"  -man           open web browser on manual page\n\
+"  -main          add default main() (e.g. for unittesting)\n\
+  -man           open web browser on manual page\n\
   -map           generate linker .map file\n\
   -noboundscheck turns off array bounds checking for all functions\n\
-  -nofloat       do not emit reference to floating point\n\
   -O             optimize\n\
   -o-            do not write object file\n\
   -odobjdir      write object & library files to directory objdir\n\
   -offilename    name output file to filename\n\
-  -op            do not strip paths from source file\n\
+  -op            preserve source path for output files\n\
   -profile       profile runtime performance of generated code\n\
   -property      enforce property syntax\n\
   -quiet         suppress unnecessary messages\n\
   -release       compile release version\n\
-  -run srcfile args...   run resulting program, passing args\n"
-#if TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
-"  -shared        generate shared library\n"
-#endif
-"  -unittest      compile in unit tests\n\
+  -run srcfile args...   run resulting program, passing args\n\
+  -shared        generate shared library (DLL)\n\
+  -transition=id show additional info about language change identified by 'id'\n\
+  -transition=?  list all language changes\n\
+  -unittest      compile in unit tests\n\
   -v             verbose\n\
   -version=level compile in version code >= level\n\
   -version=ident compile in version code identified by ident\n\
@@ -388,7 +394,7 @@ extern "C"
 }
 #endif
 
-int tryMain(int argc, char *argv[])
+int tryMain(size_t argc, char *argv[])
 {
     mem.init();                         // initialize storage allocator
     mem.setStackBottom(&argv);
@@ -400,12 +406,12 @@ int tryMain(int argc, char *argv[])
     Strings libmodules;
     char *p;
     Module *m;
-    int status = EXIT_SUCCESS;
-    int argcstart = argc;
+    size_t argcstart = argc;
     int setdebuglib = 0;
     char noboundscheck = 0;
         int setdefaultlib = 0;
     const char *inifilename = NULL;
+    global.init();
 
 #ifdef DEBUG
     printf("DMD %s DEBUG\n", global.version);
@@ -417,7 +423,7 @@ int tryMain(int argc, char *argv[])
     if (argc < 1 || !argv)
     {
       Largs:
-        error(0, "missing or null command line arguments");
+        error(Loc(), "missing or null command line arguments");
         fatal();
     }
     for (size_t i = 0; i < argc; i++)
@@ -427,7 +433,7 @@ int tryMain(int argc, char *argv[])
     }
 
     if (response_expand(&argc,&argv))   // expand response files
-        error(0, "can't open response file");
+        error(Loc(), "can't open response file");
 
     files.reserve(argc - 1);
 
@@ -444,6 +450,7 @@ int tryMain(int argc, char *argv[])
     global.params.obj = 1;
     global.params.Dversion = 2;
     global.params.quiet = 1;
+    global.params.useDeprecated = 2;
 
     global.params.linkswitches = new Strings();
     global.params.libfiles = new Strings();
@@ -456,9 +463,10 @@ int tryMain(int argc, char *argv[])
 #if TARGET_WINDOS
     global.params.is64bit = 0;
     global.params.defaultlibname = "phobos";
-#elif TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
+#elif TARGET_LINUX
+    global.params.defaultlibname = "libphobos2.a";
+#elif TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
     global.params.defaultlibname = "phobos2";
-#elif TARGET_NET
 #else
 #error "fix this"
 #endif
@@ -469,10 +477,6 @@ int tryMain(int argc, char *argv[])
 #if TARGET_WINDOS
     VersionCondition::addPredefinedGlobalIdent("Windows");
     global.params.isWindows = 1;
-#if TARGET_NET
-    // TARGET_NET macro is NOT mutually-exclusive with TARGET_WINDOS
-    VersionCondition::addPredefinedGlobalIdent("D_NET");
-#endif
 #elif TARGET_LINUX
     VersionCondition::addPredefinedGlobalIdent("Posix");
     VersionCondition::addPredefinedGlobalIdent("linux");
@@ -508,12 +512,24 @@ int tryMain(int argc, char *argv[])
     VersionCondition::addPredefinedGlobalIdent("all");
 
 #if _WIN32
-    inifilename = inifile(argv[0], "sc.ini");
+    inifilename = inifile(argv[0], "sc.ini", "Environment");
 #elif linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
-    inifilename = inifile(argv[0], "dmd.conf");
+    inifilename = inifile(argv[0], "dmd.conf", "Environment");
 #else
 #error "fix this"
 #endif
+
+    size_t dflags_argc = 0;
+    char** dflags_argv = NULL;
+    getenv_setargv("DFLAGS", &dflags_argc, &dflags_argv);
+
+    bool is64bit = global.params.is64bit; // use default
+    is64bit = parse_arch(argc, argv, is64bit);
+    is64bit = parse_arch(dflags_argc, dflags_argv, is64bit);
+    global.params.is64bit = is64bit;
+
+    inifile(argv[0], inifilename, is64bit ? "Environment64" : "Environment32");
+
     getenv_setargv("DFLAGS", &argc, &argv);
 
 #if 0
@@ -528,13 +544,37 @@ int tryMain(int argc, char *argv[])
         p = argv[i];
         if (*p == '-')
         {
-            if (strcmp(p + 1, "d") == 0)
+            if (strcmp(p + 1, "de") == 0)
+                global.params.useDeprecated = 0;
+            else if (strcmp(p + 1, "d") == 0)
                 global.params.useDeprecated = 1;
+            else if (strcmp(p + 1, "dw") == 0)
+                global.params.useDeprecated = 2;
             else if (strcmp(p + 1, "c") == 0)
                 global.params.link = 0;
-            else if (strcmp(p + 1, "cov") == 0)
-                global.params.cov = 1;
-#if TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
+            else if (memcmp(p + 1, "cov", 3) == 0)
+            {
+                global.params.cov = true;
+                // Parse:
+                //      -cov
+                //      -cov=nnn
+                if (p[4] == '=')
+                {
+                    if (isdigit((unsigned char)p[5]))
+                    {   long percent;
+
+                        errno = 0;
+                        percent = strtol(p + 5, &p, 10);
+                        if (*p || errno || percent > 100)
+                            goto Lerror;
+                        global.params.covPercent = percent;
+                    }
+                    else
+                        goto Lerror;
+                }
+                else if (p[4])
+                    goto Lerror;
+            }
             else if (strcmp(p + 1, "shared") == 0
 #if TARGET_OSX
                 // backwards compatibility with old switch
@@ -542,6 +582,7 @@ int tryMain(int argc, char *argv[])
 #endif
                 )
                 global.params.dll = 1;
+#if TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
             else if (strcmp(p + 1, "fPIC") == 0)
                 global.params.pic = 1;
 #endif
@@ -555,8 +596,10 @@ int tryMain(int argc, char *argv[])
                 global.params.symdebug = 2;
             else if (strcmp(p + 1, "gs") == 0)
                 global.params.alwaysframe = 1;
+            else if (strcmp(p + 1, "gx") == 0)
+                global.params.stackstomp = true;
             else if (strcmp(p + 1, "gt") == 0)
-            {   error(0, "use -profile instead of -gt");
+            {   error(Loc(), "use -profile instead of -gt");
                 global.params.trace = 1;
             }
             else if (strcmp(p + 1, "m32") == 0)
@@ -570,13 +613,66 @@ int tryMain(int argc, char *argv[])
 #if DMDV2
             else if (strcmp(p + 1, "vtls") == 0)
                 global.params.vtls = 1;
+            else if (memcmp(p + 1, "transition", 10) == 0)
+            {
+                // Parse:
+                //      -transition=number
+                if (p[11] == '=')
+                {
+                    if (strcmp(p + 12, "?") == 0)
+                    {
+#if PULL93
+                        printf("\
+Language changes listed by -transition=id:\n\
+  =field,3449    do list all non-mutable fields occupies object instance\n\
+  =tls           do list all variables going into thread local storage\n\
+");
+#else
+                        printf("\
+Language changes listed by -transition=id:\n\
+  =tls           do list all variables going into thread local storage\n\
+");
+#endif
+                        return EXIT_FAILURE;
+                    }
+                    if (isdigit((unsigned char)p[12]))
+                    {   long num;
+
+                        errno = 0;
+                        num = strtol(p + 12, &p, 10);
+                        if (*p || errno || num > INT_MAX)
+                            goto Lerror;
+                        switch (num)    // Bugzilla issue number
+                        {
+                            case 3449:
+                                global.params.vfield = 1;
+                                break;
+                            default:
+                                goto Lerror;
+                        }
+                    }
+                    else if (Lexer::isValidIdentifier(p + 12))
+                    {
+                        if (strcmp(p + 12, "tls") == 0)
+                            global.params.vtls = 1;
+#if PULL93
+                        else if (strcmp(p + 12, "field") == 0)
+                            global.params.vfield = 1;
+#endif
+                    }
+                    else
+                        goto Lerror;
+                }
+                else
+                    goto Lerror;
+            }
 #endif
             else if (strcmp(p + 1, "v1") == 0)
             {
 #if DMDV1
                 global.params.Dversion = 1;
 #else
-                error(0, "use DMD 1.0 series compilers for -v1 switch");
+                error(Loc(), "use DMD 1.0 series compilers for -v1 switch");
                 break;
 #endif
             }
@@ -613,7 +709,7 @@ int tryMain(int argc, char *argv[])
                         break;
 
                     case 0:
-                        error(0, "-o no longer supported, use -of or -od");
+                        error(Loc(), "-o no longer supported, use -of or -od");
                         break;
 
                     default:
@@ -743,7 +839,7 @@ int tryMain(int argc, char *argv[])
                 else
                     global.params.debuglevel = 1;
             }
-            else if (memcmp(p + 1, "version", 5) == 0)
+            else if (memcmp(p + 1, "version", 7) == 0)
             {
                 // Parse:
                 //      -version=number
@@ -804,41 +900,45 @@ int tryMain(int argc, char *argv[])
                     goto Lnoarg;
                 global.params.moduleDeps = new OutBuffer;
             }
+            else if (strcmp(p + 1, "main") == 0)
+            {
+                global.params.addMain = true;
+            }
             else if (memcmp(p + 1, "man", 3) == 0)
             {
 #if _WIN32
 #if DMDV1
                 browse("http://www.digitalmars.com/d/1.0/dmd-windows.html");
 #else
-                browse("http://www.dlang.org/dmd-windows.html");
+                browse("http://dlang.org/dmd-windows.html");
 #endif
 #endif
 #if linux
 #if DMDV1
                 browse("http://www.digitalmars.com/d/1.0/dmd-linux.html");
 #else
-                browse("http://www.dlang.org/dmd-linux.html");
+                browse("http://dlang.org/dmd-linux.html");
 #endif
 #endif
 #if __APPLE__
 #if DMDV1
                 browse("http://www.digitalmars.com/d/1.0/dmd-osx.html");
 #else
-                browse("http://www.dlang.org/dmd-osx.html");
+                browse("http://dlang.org/dmd-osx.html");
 #endif
 #endif
 #if __FreeBSD__
 #if DMDV1
                 browse("http://www.digitalmars.com/d/1.0/dmd-freebsd.html");
 #else
-                browse("http://www.dlang.org/dmd-freebsd.html");
+                browse("http://dlang.org/dmd-freebsd.html");
 #endif
 #endif
 #if __OpenBSD__
 #if DMDV1
                 browse("http://www.digitalmars.com/d/1.0/dmd-openbsd.html");
 #else
-                browse("http://www.dlang.org/dmd-openbsd.html");
+                browse("http://dlang.org/dmd-openbsd.html");
 #endif
 #endif
                 exit(EXIT_SUCCESS);
@@ -848,6 +948,14 @@ int tryMain(int argc, char *argv[])
                 global.params.runargs_length = ((i >= argcstart) ? argc : argcstart) - i - 1;
                 if (global.params.runargs_length)
                 {
+                    const char *ext = FileName::ext(argv[i + 1]);
+                    if (ext && FileName::equals(ext, "d") == 0
+                            && FileName::equals(ext, "di") == 0)
+                    {
+                        error(Loc(), "-run must be followed by a source file, not '%s'", argv[i + 1]);
+                        break;
+                    }
+
                     files.push(argv[i + 1]);
                     global.params.runargs = &argv[i + 2];
                     i += global.params.runargs_length;
@@ -861,18 +969,18 @@ int tryMain(int argc, char *argv[])
             else
             {
              Lerror:
-                error(0, "unrecognized switch '%s'", argv[i]);
+                error(Loc(), "unrecognized switch '%s'", argv[i]);
                 continue;
 
              Lnoarg:
-                error(0, "argument expected for switch '%s'", argv[i]);
+                error(Loc(), "argument expected for switch '%s'", argv[i]);
                 continue;
             }
         }
         else
         {
 #if TARGET_WINDOS
-            char *ext = FileName::ext(p);
+            const char *ext = FileName::ext(p);
             if (ext && FileName::compare(ext, "exe") == 0)
             {
                 global.params.objname = p;
@@ -882,6 +990,11 @@ int tryMain(int argc, char *argv[])
             files.push(p);
         }
     }
+
+    if(global.params.is64bit != is64bit)
+        error(Loc(), "the architecture must not be changed in the %s section of %s",
+              is64bit ? "Environment64" : "Environment32", inifilename);
+
     if (global.errors)
     {
         fatal();
@@ -900,7 +1013,7 @@ int tryMain(int argc, char *argv[])
 
 #if TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
     if (global.params.lib && global.params.dll)
-        error(0, "cannot mix -lib and -shared");
+        error(Loc(), "cannot mix -lib and -shared");
 #endif
 
     if (global.params.release)
@@ -932,14 +1045,14 @@ int tryMain(int argc, char *argv[])
             /* Use this to name the one object file with the same
              * name as the exe file.
              */
-            global.params.objname = FileName::forceExt(global.params.objname, global.obj_ext)->toChars();
+            global.params.objname = const_cast<char *>(FileName::forceExt(global.params.objname, global.obj_ext));
 
             /* If output directory is given, use that path rather than
              * the exe file path.
              */
             if (global.params.objdir)
-            {   char *name = FileName::name(global.params.objname);
-                global.params.objname = FileName::combine(global.params.objdir, name);
+            {   const char *name = FileName::name(global.params.objname);
+                global.params.objname = (char *)FileName::combine(global.params.objdir, name);
             }
         }
     }
@@ -962,7 +1075,7 @@ int tryMain(int argc, char *argv[])
     }
     else if (global.params.run)
     {
-        error(0, "flags conflict with -run");
+        error(Loc(), "flags conflict with -run");
         fatal();
     }
     else
@@ -1016,10 +1129,14 @@ int tryMain(int argc, char *argv[])
         VersionCondition::addPredefinedGlobalIdent("D_NoBoundsChecks");
 #endif
 
+    VersionCondition::addPredefinedGlobalIdent("D_HardFloat");
+
     // Initialization
     Type::init();
     Id::initialize();
     Module::init();
+    Target::init();
+    Expression::init();
     initPrecedence();
 
     if (global.params.verbose)
@@ -1064,13 +1181,18 @@ int tryMain(int argc, char *argv[])
         }
     }
 
+    if (global.params.addMain)
+    {
+        files.push(const_cast<char*>(global.main_d)); // a dummy name, we never actually look up this file
+    }
+
     // Create Modules
     Modules modules;
     modules.reserve(files.dim);
-    int firstmodule = 1;
+    bool firstmodule = true;
     for (size_t i = 0; i < files.dim; i++)
     {
-        char *ext;
+        const char *ext;
         char *name;
 
         p = files[i];
@@ -1084,7 +1206,7 @@ int tryMain(int argc, char *argv[])
         }
 #endif
 
-        p = FileName::name(p);          // strip path
+        p = (char *)FileName::name(p);          // strip path
         ext = FileName::ext(p);
         if (ext)
         {   /* Deduce what to do with a file based on its extension
@@ -1159,12 +1281,12 @@ int tryMain(int argc, char *argv[])
                     strcmp(name, ".") == 0)
                 {
                 Linvalid:
-                    error(0, "invalid file name '%s'", files[i]);
+                    error(Loc(), "invalid file name '%s'", files[i]);
                     fatal();
                 }
             }
             else
-            {   error(0, "unrecognized file extension %s", ext);
+            {   error(Loc(), "unrecognized file extension %s", ext);
                 fatal();
             }
         }
@@ -1183,12 +1305,31 @@ int tryMain(int argc, char *argv[])
         modules.push(m);
 
         if (firstmodule)
-        {   global.params.objfiles->push(m->objfile->name->str);
-            firstmodule = 0;
+        {   global.params.objfiles->push((char *)m->objfile->name->str);
+            firstmodule = false;
         }
     }
 
     // Read files
+
+    /* Start by "reading" the dummy main.d file
+     */
+    if (global.params.addMain)
+    {
+        for (size_t i = 0; 1; i++)
+        {
+            assert(i != modules.dim);
+            Module *m = modules[i];
+            if (strcmp(m->srcfile->name->str, global.main_d) == 0)
+            {
+                static const char buf[] = "int main(){return 0;}";
+                m->srcfile->setbuffer((void *)buf, sizeof(buf));
+                m->srcfile->ref = 1;
+                break;
+            }
+        }
+    }
+
 #define ASYNCREAD 1
 #if ASYNCREAD
     // Multi threaded
@@ -1224,7 +1365,7 @@ int tryMain(int argc, char *argv[])
 #if ASYNCREAD
         if (aw->read(filei))
         {
-            error(0, "cannot read file %s", m->srcfile->name->toChars());
+            error(Loc(), "cannot read file %s", m->srcfile->name->toChars());
             fatal();
         }
 #endif
@@ -1259,7 +1400,7 @@ int tryMain(int argc, char *argv[])
     if (anydocfiles && modules.dim &&
         (global.params.oneobj || global.params.objname))
     {
-        error(0, "conflicting Ddoc and obj generation options");
+        error(Loc(), "conflicting Ddoc and obj generation options");
         fatal();
     }
     if (global.errors)
@@ -1288,10 +1429,10 @@ int tryMain(int argc, char *argv[])
        m = modules[i];
        if (global.params.verbose)
            printf("importall %s\n", m->toChars());
-       m->importAll(0);
+       m->importAll(NULL);
     }
     if (global.errors)
-       fatal();
+        fatal();
 
     backend_init();
 
@@ -1400,7 +1541,50 @@ int tryMain(int argc, char *argv[])
     // Generate output files
 
     if (global.params.doXGeneration)
-        json_generate(&modules);
+    {
+        OutBuffer buf;
+        json_generate(&buf, &modules);
+
+        // Write buf to file
+        const char *name = global.params.xfilename;
+
+        if (name && name[0] == '-' && name[1] == 0)
+        {   // Write to stdout; assume it succeeds
+            int n = fwrite(buf.data, 1, buf.offset, stdout);
+            assert(n == buf.offset);        // keep gcc happy about return values
+        }
+        else
+        {
+            /* The filename generation code here should be harmonized with Module::setOutfile()
+             */
+
+            const char *jsonfilename;
+
+            if (name && *name)
+            {
+                jsonfilename = FileName::defaultExt(name, global.json_ext);
+            }
+            else
+            {
+                // Generate json file name from first obj name
+                const char *n = (*global.params.objfiles)[0];
+                n = FileName::name(n);
+
+                //if (!FileName::absolute(name))
+                    //name = FileName::combine(dir, name);
+
+                jsonfilename = FileName::forceExt(n, global.json_ext);
+            }
+
+            FileName::ensurePathToNameExists(jsonfilename);
+
+            File *jsonfile = new File(jsonfilename);
+
+            jsonfile->setbuffer(buf.data, buf.offset);
+            jsonfile->ref = 1;
+            jsonfile->writev();
+        }
+    }
 
     if (global.params.oneobj)
     {
@@ -1453,10 +1637,11 @@ int tryMain(int argc, char *argv[])
     if (global.errors)
         fatal();
 
+    int status = EXIT_SUCCESS;
     if (!global.params.objfiles->dim)
     {
         if (global.params.link)
-            error(0, "no object files to link");
+            error(Loc(), "no object files to link");
     }
     else
     {
@@ -1492,15 +1677,15 @@ int main(int argc, char *argv[])
 #if WINDOWS_SEH
   __try
   {
-#endif
     status = tryMain(argc, argv);
-#if WINDOWS_SEH
   }
   __except (__ehfilter(GetExceptionInformation()))
   {
     printf("Stack overflow\n");
     fatal();
   }
+#else
+  status = tryMain(argc, argv);
 #endif
     return status;
 }
@@ -1512,7 +1697,7 @@ int main(int argc, char *argv[])
  * The string is separated into arguments, processing \ and ".
  */
 
-void getenv_setargv(const char *envvar, int *pargc, char** *pargv)
+void getenv_setargv(const char *envvar, size_t *pargc, char** *pargv)
 {
     char *p;
 
@@ -1526,7 +1711,7 @@ void getenv_setargv(const char *envvar, int *pargc, char** *pargv)
 
     env = mem.strdup(env);      // create our own writable copy
 
-    int argc = *pargc;
+    size_t argc = *pargc;
     Strings *argv = new Strings();
     argv->setDim(argc);
 
@@ -1608,6 +1793,28 @@ void getenv_setargv(const char *envvar, int *pargc, char** *pargv)
 Ldone:
     *pargc = argc;
     *pargv = argv->tdata();
+}
+
+/***********************************
+ * Parse command line arguments for -m32 or -m64
+ * to detect the desired architecture.
+ */
+
+static bool parse_arch(size_t argc, char** argv, bool is64bit)
+{
+    for (size_t i = 0; i < argc; ++i)
+    {   char* p = argv[i];
+        if (p[0] == '-')
+        {
+            if (strcmp(p + 1, "m32") == 0)
+                is64bit = 0;
+            else if (strcmp(p + 1, "m64") == 0)
+                is64bit = 1;
+            else if (strcmp(p + 1, "run") == 0)
+                break;
+        }
+    }
+    return is64bit;
 }
 
 #if WINDOWS_SEH

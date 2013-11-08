@@ -24,15 +24,16 @@ void usage()
           "   example: d_do_test runnable pi d\n"
           "\n"
           "   relevant environment variables:\n"
-          "      ARGS:        set to execute all combinations of\n"
-          "      DMD:         compiler to use, ex: ../src/dmd\n"
-          "      OS:          win32, linux, freebsd, osx\n"
-          "      RESULTS_DIR: base directory for test results\n"
+          "      ARGS:          set to execute all combinations of\n"
+          "      REQUIRED_ARGS: arguments always passed to the compiler\n"
+          "      DMD:           compiler to use, ex: ../src/dmd\n"
+          "      OS:            win32, win64, linux, freebsd, osx\n"
+          "      RESULTS_DIR:   base directory for test results\n"
           "   windows vs non-windows portability env vars:\n"
-          "      DSEP:        \\\\ or /\n"
-          "      SEP:         \\ or /\n"
-          "      OBJ:        .obj or .o\n"
-          "      EXE:        .exe or <null>\n");
+          "      DSEP:          \\\\ or /\n"
+          "      SEP:           \\ or /\n"
+          "      OBJ:          .obj or .o\n"
+          "      EXE:          .exe or <null>\n");
 }
 
 enum TestMode
@@ -69,6 +70,7 @@ struct EnvData
     string exe;
     string os;
     string model;
+    string required_args;
 }
 
 bool findTestParameter(string file, string token, ref string result)
@@ -99,33 +101,46 @@ bool findTestParameter(string file, string token, ref string result)
     return true;
 }
 
-bool findOutputParameter(string file, string token, ref string result, string sep)
+bool findOutputParameter(string file, string token, out string result, string sep)
 {
-    auto istart = std.string.indexOf(file, token);
-    if (istart == -1)
-        return false;
+    bool found = false;
 
-    // skips the :, if present
-    if (file[istart] == ':') ++istart;
+    while (true)
+    {
+        auto istart = std.string.indexOf(file, token);
+        if (istart == -1)
+            break;
+        found = true;
 
-    enum embed_sep = "---";
+        // skips the :, if present
+        if (file[istart] == ':') ++istart;
 
-    auto n = std.string.indexOf(file[istart .. $], embed_sep);
-    enforce(n != -1);
-    istart += n + embed_sep.length;
-    while (file[0] == '-') ++istart;
+        enum embed_sep = "---";
 
-    auto iend = std.string.indexOf(file[istart .. $], embed_sep);
-    enforce(iend != -1);
-    iend += istart;
+        auto n = std.string.indexOf(file[istart .. $], embed_sep);
+        enforce(n != -1);
+        istart += n + embed_sep.length;
+        while (file[istart] == '-') ++istart;
+        if (file[istart] == '\r') ++istart;
+        if (file[istart] == '\n') ++istart;
 
-    auto str = file[istart .. iend];
-    str = std.string.strip(str);
-    str = std.regex.replace(str, regex(`\r\n|\r|\n`, "g"), "\n");
-    str = std.regex.replace(str, regex(`(?<=\w\w*)/(?=\w[\w.]*\(\d+\))`, "g"), sep);
+        auto iend = std.string.indexOf(file[istart .. $], embed_sep);
+        enforce(iend != -1);
+        iend += istart;
 
-    result = str ? str : ""; // keep non-null
-    return true;
+        result ~= file[istart .. iend];
+
+        while (file[iend] == '-') ++iend;
+        file = file[iend .. $];
+    }
+
+    if (found)
+    {
+        result = std.string.strip(result);
+        result = result.unifyNewLine().unifyDirSep(sep);
+        result = result ? result : ""; // keep non-null
+    }
+    return found;
 }
 
 void gatherTestParameters(ref TestArgs testArgs, string input_dir, string input_file, const ref EnvData envData)
@@ -133,6 +148,8 @@ void gatherTestParameters(ref TestArgs testArgs, string input_dir, string input_
     string file = cast(string)std.file.read(input_file);
 
     findTestParameter(file, "REQUIRED_ARGS", testArgs.requiredArgs);
+    if(envData.required_args.length)
+        testArgs.requiredArgs ~= " " ~ envData.required_args;
 
     if (! findTestParameter(file, "PERMUTE_ARGS", testArgs.permuteArgs))
     {
@@ -144,8 +161,8 @@ void gatherTestParameters(ref TestArgs testArgs, string input_dir, string input_
             testArgs.permuteArgs = replace(testArgs.permuteArgs, "-unittest", "");
     }
 
-    // win32 doesn't support pic, nor does freebsd/64 currently
-    if (envData.os == "win32" || envData.os == "freebsd")
+    // win(32|64) doesn't support pic, nor does freebsd/64 currently
+    if (envData.os == "win32" || envData.os == "win64" || envData.os == "freebsd")
     {
         auto index = std.string.indexOf(testArgs.permuteArgs, "-fPIC");
         if (index != -1)
@@ -161,7 +178,7 @@ void gatherTestParameters(ref TestArgs testArgs, string input_dir, string input_
     findTestParameter(file, "EXTRA_SOURCES", extraSourcesStr);
     testArgs.sources = [input_file];
     // prepend input_dir to each extra source file
-    foreach(s; split(extraSourcesStr, " "))
+    foreach(s; split(extraSourcesStr))
         testArgs.sources ~= input_dir ~ "/" ~ s;
 
     // swap / with $SEP
@@ -184,7 +201,7 @@ void gatherTestParameters(ref TestArgs testArgs, string input_dir, string input_
 string[] combinations(string argstr)
 {
     string[] results;
-    string[] args = split(argstr, " ");
+    string[] args = split(argstr);
     long combinations = 1 << args.length;
     for (size_t i = 0; i < combinations; i++)
     {
@@ -208,9 +225,10 @@ string[] combinations(string argstr)
     return results;
 }
 
-string genTempFilename()
+string genTempFilename(string result_path)
 {
     auto a = appender!string();
+    a.put(result_path);
     foreach (ref e; 0 .. 8)
     {
         formattedWrite(a, "%x", rndGen.front);
@@ -247,9 +265,9 @@ void removeIfExists(in char[] filename)
         std.file.remove(filename);
 }
 
-string execute(ref File f, string command, bool expectpass)
+string execute(ref File f, string command, bool expectpass, string result_path)
 {
-    auto filename = genTempFilename();
+    auto filename = genTempFilename(result_path);
     scope(exit) removeIfExists(filename);
 
     auto rc = system(command ~ " > " ~ filename ~ " 2>&1");
@@ -275,10 +293,34 @@ string execute(ref File f, string command, bool expectpass)
     return output;
 }
 
+string unifyNewLine(string str)
+{
+    return std.regex.replace(str, regex(`\r\n|\r|\n`, "g"), "\n");
+}
+
+string unifyDirSep(string str, string sep)
+{
+    return std.regex.replace(str, regex(`(?<=\w\w*)/(?=\w[\w/]*\.di?\b)`, "g"), sep);
+}
+unittest
+{
+    assert(`fail_compilation/test.d(1) Error: dummy error message for 'test'`.unifyDirSep(`\`)
+        == `fail_compilation\test.d(1) Error: dummy error message for 'test'`);
+    assert(`fail_compilation/test.d(1) Error: at fail_compilation/test.d(2)`.unifyDirSep(`\`)
+        == `fail_compilation\test.d(1) Error: at fail_compilation\test.d(2)`);
+
+    assert(`fail_compilation/test.d(1) Error: at fail_compilation/imports/test.d(2)`.unifyDirSep(`\`)
+        == `fail_compilation\test.d(1) Error: at fail_compilation\imports\test.d(2)`);
+    assert(`fail_compilation/diag.d(2): Error: fail_compilation/imports/fail.d must be imported`.unifyDirSep(`\`)
+        == `fail_compilation\diag.d(2): Error: fail_compilation\imports\fail.d must be imported`);
+}
+
 int main(string[] args)
 {
     if (args.length != 4)
     {
+        if (args.length == 2 && args[1] == "-unittest")
+            return 0;
         usage();
         return 1;
     }
@@ -297,10 +339,12 @@ int main(string[] args)
     envData.os            = getenv("OS");
     envData.dmd           = replace(getenv("DMD"), "/", envData.sep);
     envData.model         = getenv("MODEL");
+    envData.required_args = getenv("REQUIRED_ARGS");
 
+    string result_path    = envData.results_dir ~ envData.sep;
     string input_file     = input_dir ~ envData.sep ~ test_name ~ "." ~ test_extension;
-    string output_dir     = envData.results_dir ~ envData.sep ~ input_dir;
-    string output_file    = envData.results_dir ~ envData.sep ~ input_dir ~ envData.sep ~ test_name ~ "." ~ test_extension ~ ".out";
+    string output_dir     = result_path ~ input_dir;
+    string output_file    = result_path ~ input_dir ~ envData.sep ~ test_name ~ "." ~ test_extension ~ ".out";
     string test_app_dmd_base = output_dir ~ envData.sep ~ test_name ~ "_";
 
     TestArgs testArgs;
@@ -339,9 +383,8 @@ int main(string[] args)
         try
         {
             string[] toCleanup;
-            scope(exit) foreach (file; toCleanup) collectException(std.file.remove(file));
 
-            auto thisRunName = genTempFilename();
+            auto thisRunName = genTempFilename(result_path);
             auto fThisRun = File(thisRunName, "w");
             scope(exit)
             {
@@ -357,9 +400,6 @@ int main(string[] args)
                 string objfile = output_dir ~ envData.sep ~ test_name ~ "_" ~ to!string(i) ~ envData.obj;
                 toCleanup ~= objfile;
 
-                if (testArgs.mode == TestMode.RUN)
-                    toCleanup ~= test_app_dmd;
-
                 string command = format("%s -m%s -I%s %s %s -od%s -of%s %s%s", envData.dmd, envData.model, input_dir,
                         testArgs.requiredArgs, c, output_dir,
                         (testArgs.mode == TestMode.RUN ? test_app_dmd : objfile),
@@ -367,38 +407,38 @@ int main(string[] args)
                         join(testArgs.sources, " "));
                 version(Windows) command ~= " -map nul.map";
 
-                compile_output = execute(fThisRun, command, testArgs.mode != TestMode.FAIL_COMPILE);
+                compile_output = execute(fThisRun, command, testArgs.mode != TestMode.FAIL_COMPILE, result_path);
             }
             else
             {
                 foreach (filename; testArgs.sources)
                 {
-                    string newo= envData.results_dir ~ envData.sep ~
-                        replace(replace(filename, ".d", envData.obj), envData.sep~"imports"~envData.sep, envData.sep);
+                    string newo= result_path ~ replace(replace(filename, ".d", envData.obj), envData.sep~"imports"~envData.sep, envData.sep);
                     toCleanup ~= newo;
 
                     string command = format("%s -m%s -I%s %s %s -od%s -c %s", envData.dmd, envData.model, input_dir,
                         testArgs.requiredArgs, c, output_dir, filename);
-                    compile_output ~= execute(fThisRun, command, testArgs.mode != TestMode.FAIL_COMPILE);
+                    compile_output ~= execute(fThisRun, command, testArgs.mode != TestMode.FAIL_COMPILE, result_path);
                 }
 
                 if (testArgs.mode == TestMode.RUN)
                 {
                     // link .o's into an executable
-                    string command = format("%s -m%s -od%s -of%s %s", envData.dmd, envData.model, output_dir, test_app_dmd, join(toCleanup, " "));
+                    string command = format("%s -m%s %s -od%s -of%s %s", envData.dmd, envData.model, envData.required_args, output_dir, test_app_dmd, join(toCleanup, " "));
                     version(Windows) command ~= " -map nul.map";
 
-                    // add after building the command so that before now, it's purely the .o's involved
-                    toCleanup ~= test_app_dmd;
-
-                    execute(fThisRun, command, true);
+                    execute(fThisRun, command, true, result_path);
                 }
             }
 
+            compile_output = std.string.strip(compile_output);
+            compile_output = compile_output.unifyNewLine();
+
+            auto m = std.regex.match(compile_output, `Internal error: .*$`);
+            enforce(!m, m.hit);
+
             if (testArgs.compileOutput !is null)
             {
-                compile_output = std.string.strip(compile_output);
-                compile_output = std.regex.replace(compile_output, regex(`\r\n|\r|\n`, "g"), "\n");
                 compile_output = std.regex.replace(compile_output, regex(`DMD v2\.[0-9]+ DEBUG\n`, ""), "");
                 compile_output = std.regex.replace(compile_output, regex(`\nDMD v2\.[0-9]+ DEBUG`, ""), "");
                 enforce(compile_output == testArgs.compileOutput,
@@ -407,10 +447,18 @@ int main(string[] args)
 
             if (testArgs.mode == TestMode.RUN)
             {
+                toCleanup ~= test_app_dmd;
+                version(Windows)
+                    if (envData.model == "64")
+                    {
+                        toCleanup ~= test_app_dmd_base ~ to!string(i) ~ ".ilk";
+                        toCleanup ~= test_app_dmd_base ~ to!string(i) ~ ".pdb";
+                    }
+
                 string command = test_app_dmd;
                 if (testArgs.executeArgs) command ~= " " ~ testArgs.executeArgs;
 
-                execute(fThisRun, command, true);
+                execute(fThisRun, command, true, result_path);
             }
 
             fThisRun.close();
@@ -418,9 +466,12 @@ int main(string[] args)
             if (testArgs.postScript)
             {
                 f.write("Executing post-test script: ");
-                version (Windows) testArgs.postScript = "bash " ~ testArgs.postScript;
-                execute(f, testArgs.postScript ~ " " ~ thisRunName, true);
+                string prefix = "";
+                version (Windows) prefix = "bash ";
+                execute(f, prefix ~ testArgs.postScript ~ " " ~ thisRunName, true, result_path);
             }
+
+            foreach (file; toCleanup) collectException(std.file.remove(file));
         }
         catch(Exception e)
         {

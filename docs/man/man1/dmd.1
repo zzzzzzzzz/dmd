@@ -32,7 +32,11 @@ directory
 Write documentation file to
 .I filename
 .IP -d
-Allow deprecated features.
+Silently allow deprecated features.
+.IP -dw
+Show use of deprecated features as warnings (default).
+.IP -de
+Show use of deprecated features as errors (halt compilation).
 .IP -debug
 Compile in debug code
 .IP -debug=\fIlevel\fR
@@ -98,8 +102,6 @@ Generate a library rather than object files
 Open web browser on manual page
 .IP -map
 Generate linker .map file
-.IP -nofloat
-Do not emit reference to floating point
 .IP -O
 Optimize
 .IP -o-

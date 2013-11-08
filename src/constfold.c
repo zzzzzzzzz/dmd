@@ -902,6 +902,11 @@ Expression *Equal(enum TOK op, Type *type, Expression *e1, Expression *e2)
                     break;
             }
         }
+        if (cmp && es1->type->needsNested())
+        {
+            if ((es1->sinit != NULL) != (es2->sinit != NULL))
+                cmp = 0;
+        }
     }
 #if 0 // Should handle this
     else if (e1->op == TOKarrayliteral && e2->op == TOKstring)
@@ -1369,6 +1374,7 @@ Expression *Index(Type *type, Expression *e1, Expression *e2)
         {   ArrayLiteralExp *ale = (ArrayLiteralExp *)e1;
             e = (*ale->elements)[i];
             e->type = type;
+            e->loc = loc;
             if (e->hasSideEffect())
                 e = EXP_CANT_INTERPRET;
         }
@@ -1387,6 +1393,7 @@ Expression *Index(Type *type, Expression *e1, Expression *e2)
             else
             {   e = (*ale->elements)[i];
                 e->type = type;
+                e->loc = loc;
                 if (e->hasSideEffect())
                     e = EXP_CANT_INTERPRET;
             }
@@ -1407,6 +1414,7 @@ Expression *Index(Type *type, Expression *e1, Expression *e2)
             if (ex->isBool(TRUE))
             {   e = (*ae->values)[i];
                 e->type = type;
+                e->loc = loc;
                 if (e->hasSideEffect())
                     e = EXP_CANT_INTERPRET;
                 break;
@@ -1487,7 +1495,7 @@ Expression *Slice(Type *type, Expression *e1, Expression *lwr, Expression *upr)
 /* Set a slice of char array literal 'existingAE' from a string 'newval'.
  * existingAE[firstIndex..firstIndex+newval.length] = newval.
  */
-void sliceAssignArrayLiteralFromString(ArrayLiteralExp *existingAE, StringExp *newval, int firstIndex)
+void sliceAssignArrayLiteralFromString(ArrayLiteralExp *existingAE, StringExp *newval, size_t firstIndex)
 {
     size_t newlen =  newval->len;
     size_t sz = newval->sz;
@@ -1513,7 +1521,7 @@ void sliceAssignArrayLiteralFromString(ArrayLiteralExp *existingAE, StringExp *n
 /* Set a slice of string 'existingSE' from a char array literal 'newae'.
  *   existingSE[firstIndex..firstIndex+newae.length] = newae.
  */
-void sliceAssignStringFromArrayLiteral(StringExp *existingSE, ArrayLiteralExp *newae, int firstIndex)
+void sliceAssignStringFromArrayLiteral(StringExp *existingSE, ArrayLiteralExp *newae, size_t firstIndex)
 {
     unsigned char *s = (unsigned char *)existingSE->string;
     for (size_t j = 0; j < newae->elements->dim; j++)
@@ -1534,7 +1542,7 @@ void sliceAssignStringFromArrayLiteral(StringExp *existingSE, ArrayLiteralExp *n
 /* Set a slice of string 'existingSE' from a string 'newstr'.
  *   existingSE[firstIndex..firstIndex+newstr.length] = newstr.
  */
-void sliceAssignStringFromString(StringExp *existingSE, StringExp *newstr, int firstIndex)
+void sliceAssignStringFromString(StringExp *existingSE, StringExp *newstr, size_t firstIndex)
 {
     unsigned char *s = (unsigned char *)existingSE->string;
     size_t sz = existingSE->sz;
@@ -1613,7 +1621,7 @@ Expression *Cat(Type *type, Expression *e1, Expression *e2)
             StringExp *es;
             if (t->nextOf())
                 t = t->nextOf()->toBasetype();
-            int sz = t->size();
+            size_t sz = t->size();
 
             dinteger_t v = e->toInteger();
 
@@ -1732,7 +1740,7 @@ Expression *Cat(Type *type, Expression *e1, Expression *e2)
         void *s;
         StringExp *es1 = (StringExp *)e1;
         StringExp *es;
-        int sz = es1->sz;
+        size_t sz = es1->sz;
         dinteger_t v = e2->toInteger();
 
         // Is it a concatentation of homogenous types?

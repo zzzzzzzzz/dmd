@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -124,53 +123,9 @@ void el_term()
  * Allocate an element.
  */
 
-#if SCPP && __SC__ && __INTSIZE == 4 && TX86 && !_DEBUG_TRACE && !MEM_DEBUG && _WIN32 && !defined(DEBUG)
-
-__declspec(naked) elem *el_calloc()
-{
-    __asm
-    {
-        mov     EAX,elcount
-        push    EDI
-
-        inc     EAX
-        mov     EDI,nextfree
-
-        test    EDI,EDI
-        je      L27
-
-        mov     EDX,E1[EDI]
-        mov     elcount,EAX
-
-        xor     EAX,EAX
-        mov     nextfree,EDX
-        jmp     L30
-
-L27:    push    sizeof(elem)
-        mov     elcount,EAX
-        call    mem_fmalloc
-        mov     EDI,EAX
-        xor     EAX,EAX
-
-L30:    mov     EDX,EDI
-        mov     ECX,(sizeof(elem) + 3) / 4
-    #if DOS386
-        push    DS
-        pop     ES
-    #endif
-        rep     stosd
-        mov     EAX,EDX
-        pop     EDI
-        ret
-    }
-}
-
-#else
-
 elem *el_calloc()
 {
     elem *e;
-    static elem ezero;
 
     elcount++;
     if (nextfree)
@@ -182,7 +137,7 @@ elem *el_calloc()
 #ifdef STATS
     eprm_cnt++;
 #endif
-    *e = ezero;                         /* clear it             */
+    MEMCLEAR(e, sizeof(*e));
 
 #ifdef DEBUG
     e->id = IDelem;
@@ -193,7 +148,6 @@ elem *el_calloc()
     return e;
 }
 
-#endif
 
 /***************
  * Free element
@@ -391,6 +345,25 @@ int el_nparams(elem *e)
         return 1;
 }
 
+/******************************************
+ * Fill an array with the parameters.
+ */
+
+void el_paramArray(elem ***parray, elem *e)
+{
+    if (e->Eoper == OPparam)
+    {
+        el_paramArray(parray, e->E1);
+        el_paramArray(parray, e->E2);
+        freenode(e);
+    }
+    else
+    {
+        **parray = e;
+        ++(*parray);
+    }
+}
+
 /*************************************
  * Create a quad word out of two dwords.
  */
@@ -430,9 +403,9 @@ elem * el_alloctmp(tym_t ty)
   symbol *s;
 
   assert(MARS || !PARSER);
-  s = symbol_generate(SCtmp,type_fake(ty));
+  s = symbol_generate(SCauto,type_fake(ty));
   symbol_add(s);
-  s->Sfl = FLtmp;
+  s->Sfl = FLauto;
   s->Sflags = SFLfree | SFLunambig | GTregcand;
   return el_var(s);
 }
@@ -553,6 +526,30 @@ elem * el_copytree(elem *e)
     }
     return d;
 }
+
+/*******************************
+ * Replace (e) with ((stmp = e),stmp)
+ */
+
+#if MARS
+elem *exp2_copytotemp(elem *e)
+{
+    //printf("exp2_copytotemp()\n");
+    elem_debug(e);
+    Symbol *stmp = symbol_genauto(e);
+    elem *eeq = el_bin(OPeq,e->Ety,el_var(stmp),e);
+    elem *er = el_bin(OPcomma,e->Ety,eeq,el_var(stmp));
+    if (tybasic(e->Ety) == TYstruct || tybasic(e->Ety) == TYarray)
+    {
+        eeq->Eoper = OPstreq;
+        eeq->ET = e->ET;
+        eeq->E1->ET = e->ET;
+        er->ET = e->ET;
+        er->E2->ET = e->ET;
+    }
+    return er;
+}
+#endif
 
 /*************************
  * Similar to el_copytree(e). But if e has any side effects, it's replaced
@@ -1108,9 +1105,15 @@ symbol *el_alloc_localgot()
         char name[15];
         static int tmpnum;
         sprintf(name, "_LOCALGOT%d", tmpnum++);
-        localgot = symbol_name(name, SCtmp, type_fake(TYnptr));
+        type *t = type_fake(TYnptr);
+        /* Make it volatile because we need it for calling functions, but that isn't
+         * noticed by the data flow analysis. Hence, it may get deleted if we don't
+         * make it volatile.
+         */
+        type_setcv(&t, mTYvolatile);
+        localgot = symbol_name(name, SCauto, t);
         symbol_add(localgot);
-        localgot->Sfl = FLtmp;
+        localgot->Sfl = FLauto;
         localgot->Sflags = SFLfree | SFLunambig | GTregcand;
     }
     return localgot;
@@ -1549,7 +1552,7 @@ elem * el_var(symbol *s)
             ea = el_var(rtlsym[RTLSYM_TLS_ARRAY]);
             e2 = el_bin(OPadd,ea->Ety,ea,e2);
         }
-        e2 = el_una(OPind,TYint,e2);
+        e2 = el_una(OPind,TYsize_t,e2);
 
         e->Eoper = OPind;
         e->E1 = el_bin(OPadd,e1->Ety,e1,e2);
@@ -1714,7 +1717,7 @@ elem * el_ptr_offset(symbol *s,targ_size_t offset)
  *      0       elem evaluates left-to-right
  */
 
-HINT ERTOL(elem *e)
+int ERTOL(elem *e)
 {
     elem_debug(e);
     assert(!PARSER);

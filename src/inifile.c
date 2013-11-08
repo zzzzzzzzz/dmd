@@ -1,12 +1,12 @@
 /*
  * Some portions copyright (c) 1994-1995 by Symantec
- * Copyright (c) 1999-2012 by Digital Mars
+ * Copyright (c) 1999-2013 by Digital Mars
  * All Rights Reserved
  * http://www.digitalmars.com
  * Written by Walter Bright
  *
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -28,47 +28,28 @@
 #include        <limits.h>
 #endif
 
-#if __sun
-#include        <alloca.h>
-#endif
-
-#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || __HAIKU__
-#include "gnuc.h"
-#endif
-
 #include        "root.h"
 #include        "rmem.h"
+#include        "port.h"
 
 #define LOG     0
 
 char *skipspace(const char *p);
 
-#if __GNUC__
-char *strupr(char *s)
-{
-    char *t = s;
-
-    while (*s)
-    {
-        *s = toupper(*s);
-        s++;
-    }
-
-    return t;
-}
-#endif
 
 /*****************************
- * Read and analyze .ini file.
+ * Read and analyze .ini file, i.e. write the entries of the specified section
+ *  into the process environment
  * Input:
- *      argv0   program name (argv[0])
- *      inifile .ini file name
+ *      argv0           program name (argv[0])
+ *      inifile         .ini file name
+ *      envsectionname  name of the section to process
  * Returns:
  *      file name of ini file
  *      Note: this is a memory leak
  */
 
-const char *inifile(const char *argv0x, const char *inifilex)
+const char *inifile(const char *argv0x, const char *inifilex, const char *envsectionname)
 {
     char *argv0 = (char *)argv0x;
     char *inifile = (char *)inifilex;   // do const-correct later
@@ -76,6 +57,7 @@ const char *inifile(const char *argv0x, const char *inifilex)
     char *filename;
     OutBuffer buf;
     int envsection = 0;
+    int envsectionnamelen = strlen(envsectionname);
 
 #if LOG
     printf("inifile(argv0 = '%s', inifile = '%s')\n", argv0, inifile);
@@ -98,7 +80,7 @@ const char *inifile(const char *argv0x, const char *inifilex)
         }
         else
         {
-            filename = FileName::combine(getenv("HOME"), inifile);
+            filename = (char *)FileName::combine(getenv("HOME"), inifile);
             if (!FileName::exists(filename))
             {
 #if _WIN32 // This fix by Tim Matthews
@@ -144,7 +126,7 @@ const char *inifile(const char *argv0x, const char *inifilex)
                     printf("\tPATH='%s'\n", p);
 #endif
                     Strings *paths = FileName::splitPath(p);
-                    filename = FileName::searchPath(paths, argv0, 0);
+                    filename = (char *)FileName::searchPath(paths, argv0, 0);
                     if (!filename)
                         goto Letc;              // argv0 not found on path
                     filename = (char *)FileName::replaceName(filename, inifile);
@@ -154,7 +136,7 @@ const char *inifile(const char *argv0x, const char *inifilex)
                     // Search /etc/ for inifile
                 Letc:
 #endif
-                    filename = FileName::combine((char *)"/etc/", inifile);
+                    filename = (char *)FileName::combine((char *)"/etc/", inifile);
 
                 Ldone:
                     ;
@@ -162,7 +144,7 @@ const char *inifile(const char *argv0x, const char *inifilex)
             }
         }
     }
-    path = FileName::path(filename);
+    path = (char *)FileName::path(filename);
 #if LOG
     printf("\tpath = '%s', filename = '%s'\n", path, filename);
 #endif
@@ -205,7 +187,6 @@ const char *inifile(const char *argv0x, const char *inifilex)
         // The line is file.buffer[linestart..i]
         char *line;
         size_t len;
-        char *p;
         char *pn;
 
         line = (char *)&file.buffer[linestart];
@@ -224,7 +205,9 @@ const char *inifile(const char *argv0x, const char *inifilex)
                 {
                     if (line[j] == '%')
                     {
-                        if (j - k == 3 && memicmp(&line[k + 1], "@P", 2) == 0)
+                        char *p = NULL;
+                        char *palloc = NULL;
+                        if (j - k == 3 && Port::memicmp(&line[k + 1], "@P", 2) == 0)
                         {
                             // %@P% is special meaning the path to the .ini file
                             p = path;
@@ -238,16 +221,20 @@ const char *inifile(const char *argv0x, const char *inifilex)
                             if (len2 <= sizeof(tmp))
                                 p = tmp;
                             else
-                                p = (char *)alloca(len2);
+                            {   p = (char *)malloc(len2);
+                                palloc = p;
+                            }
                             len2--;
                             memcpy(p, &line[k + 1], len2);
                             p[len2] = 0;
-                            strupr(p);
+                            Port::strupr(p);
                             p = getenv(p);
                             if (!p)
                                 p = (char *)"";
                         }
                         buf.writestring(p);
+                        if (palloc)
+                            free(palloc);
                         k = j;
                         goto L1;
                     }
@@ -262,7 +249,8 @@ const char *inifile(const char *argv0x, const char *inifilex)
         while (buf.offset && isspace(buf.data[buf.offset - 1]))
             buf.offset--;
 
-        p = buf.toChars();
+        {
+        char *p = buf.toChars();
 
         // The expanded line is in p.
         // Now parse it for meaning.
@@ -278,8 +266,8 @@ const char *inifile(const char *argv0x, const char *inifilex)
                 p = skipspace(p + 1);
                 for (pn = p; isalnum((unsigned char)*pn); pn++)
                     ;
-                if (pn - p == 11 &&
-                    memicmp(p, "Environment", 11) == 0 &&
+                if (pn - p == envsectionnamelen &&
+                    Port::memicmp(p, envsectionname, envsectionnamelen) == 0 &&
                     *skipspace(pn) == ']'
                    )
                     envsection = 1;
@@ -315,6 +303,7 @@ const char *inifile(const char *argv0x, const char *inifilex)
 #endif
                 }
                 break;
+        }
         }
 
      Lskip:

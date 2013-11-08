@@ -1,6 +1,6 @@
 
 // Compiler implementation of the D programming language
-// Copyright (c) 1999-2012 by Digital Mars
+// Copyright (c) 1999-2013 by Digital Mars
 // All Rights Reserved
 // written by Walter Bright
 // http://www.digitalmars.com
@@ -9,10 +9,6 @@
 #include <stddef.h>
 #include <time.h>
 #include <assert.h>
-
-#if __sun
-#include <alloca.h>
-#endif
 
 #include "mars.h"
 #include "module.h"
@@ -27,6 +23,7 @@
 #include "import.h"
 #include "template.h"
 #include "lib.h"
+#include "target.h"
 
 #include "rmem.h"
 #include "cc.h"
@@ -38,10 +35,6 @@
 #include "cgcv.h"
 #include "outbuf.h"
 #include "irstate.h"
-
-struct Environment;
-
-Environment *benv;
 
 void slist_add(Symbol *s);
 void slist_reset();
@@ -79,6 +72,7 @@ Dsymbols obj_symbols_towrite;
 
 void obj_append(Dsymbol *s)
 {
+    //printf("deferred: %s\n", s->toChars());
     obj_symbols_towrite.push(s);
 }
 
@@ -132,14 +126,14 @@ void obj_write_deferred(Library *library)
         /* Set object file name to be source name with sequence number,
          * as mangled symbol names get way too long.
          */
-        char *fname = FileName::removeExt(mname);
+        const char *fname = FileName::removeExt(mname);
         OutBuffer namebuf;
         unsigned hash = 0;
         for (char *p = s->toChars(); *p; p++)
             hash += *p;
         namebuf.printf("%s_%x_%x.%s", fname, count, hash, global.obj_ext);
         namebuf.writeByte(0);
-        mem.free(fname);
+        FileName::free((char *)fname);
         fname = (char *)namebuf.extractData();
 
         //printf("writing '%s'\n", fname);
@@ -167,11 +161,8 @@ symbol *callFuncsAndGates(Module *m, symbols *sctors, StaticDtorDeclarations *ec
             /* t will be the type of the functions generated:
              *      extern (C) void func();
              */
-            t = type_alloc(TYnfunc);
-            t->Tflags |= TFprototype | TFfixed;
+            t = type_function(TYnfunc, NULL, 0, false, tsvoid);
             t->Tmangle = mTYman_c;
-            t->Tnext = tsvoid;
-            tsvoid->Tcount++;
         }
 
         localgot = NULL;
@@ -242,14 +233,15 @@ void obj_start(char *srcfile)
 
 void obj_end(Library *library, File *objfile)
 {
-    objmod->term();
+    const char *objfilename = objfile->name->toChars();
+    objmod->term(objfilename);
     delete objmod;
     objmod = NULL;
 
     if (library)
     {
         // Transfer image to library
-        library->addObject(objfile->name->toChars(), objbuf.buf, objbuf.p - objbuf.buf);
+        library->addObject(objfilename, objbuf.buf, objbuf.p - objbuf.buf);
         objbuf.buf = NULL;
     }
     else
@@ -258,11 +250,9 @@ void obj_end(Library *library, File *objfile)
         objfile->setbuffer(objbuf.buf, objbuf.p - objbuf.buf);
         objbuf.buf = NULL;
 
-        char *p = FileName::path(objfile->name->toChars());
-        FileName::ensurePathExists(p);
-        //mem.free(p);
+        FileName::ensurePathToNameExists(objfilename);
 
-        //printf("write obj %s\n", objfile->name->toChars());
+        //printf("write obj %s\n", objfilename);
         objfile->writev();
     }
     objbuf.pend = NULL;
@@ -356,6 +346,7 @@ void Module::genobjfile(int multiobj)
     for (size_t i = 0; i < members->dim; i++)
     {
         Dsymbol *member = (*members)[i];
+        //printf("toObjFile %s %s\n", member->kind(), member->toChars());
         member->toObjFile(multiobj);
     }
 
@@ -383,11 +374,8 @@ void Module::genobjfile(int multiobj)
         /* t will be the type of the functions generated:
          *      extern (C) void func();
          */
-        type *t = type_alloc(TYnfunc);
-        t->Tflags |= TFprototype | TFfixed;
+        type *t = type_function(TYnfunc, NULL, 0, false, tsvoid);
         t->Tmangle = mTYman_c;
-        t->Tnext = tsvoid;
-        tsvoid->Tcount++;
 
         sictor = toSymbolX("__modictor", SCglobal, t, "FZv");
         cstate.CSpsymtab = &sictor->Sfunc->Flocsym;
@@ -402,11 +390,13 @@ void Module::genobjfile(int multiobj)
             ebcov = addressElem(ebcov, Type::tvoid->arrayOf(), false);
         }
 
-        elem *e = el_params(ecov,
+        elem *e = el_params(
+                      el_long(TYuchar, global.params.covPercent),
+                      ecov,
                       ebcov,
                       toEfilename(),
                       NULL);
-        e = el_bin(OPcall, TYvoid, el_var(rtlsym[RTLSYM_DCOVER]), e);
+        e = el_bin(OPcall, TYvoid, el_var(rtlsym[RTLSYM_DCOVER2]), e);
         eictor = el_combine(e, eictor);
         ictorlocalgot = localgot;
     }
@@ -495,7 +485,7 @@ void Module::genobjfile(int multiobj)
                 fpr.alloc(sp->Stype, sp->Stype->Tty, &sp->Spreg, &sp->Spreg2);
 
                 sp->Sflags &= ~SFLspill;
-                sp->Sfl = (sp->Sclass == SCshadowreg) ? FLpara : FLauto;
+                sp->Sfl = (sp->Sclass == SCshadowreg) ? FLpara : FLfast;
                 cstate.CSpsymtab = &ma->Sfunc->Flocsym;
                 symbol_add(sp);
 
@@ -566,6 +556,15 @@ void FuncDeclaration::toObjFile(int multiobj)
         return;
     }
 
+    if (semanticRun == PASSsemanticdone)
+    {
+        /* What happened is this function failed semantic3() with errors,
+         * but the errors were gagged.
+         * Try to reproduce those errors, and then fail.
+         */
+        error("errors compiling the function");
+        return;
+    }
     assert(semanticRun == PASSsemantic3done);
     semanticRun = PASSobj;
 
@@ -574,6 +573,15 @@ void FuncDeclaration::toObjFile(int multiobj)
 
     Symbol *s = func->toSymbol();
     func_t *f = s->Sfunc;
+
+    // tunnel type of "this" to debug info generation
+    if (AggregateDeclaration* ad = func->parent->isAggregateDeclaration())
+    {
+        ::type* t = ad->getType()->toCtype();
+        if(cd)
+            t = t->Tnext; // skip reference
+        f->Fclass = (Classsym *)t;
+    }
 
 #if TARGET_WINDOS
     /* This is done so that the 'this' pointer on the stack is the same
@@ -641,13 +649,21 @@ void FuncDeclaration::toObjFile(int multiobj)
         // Pull in RTL startup code (but only once)
         if (func->isMain() && onlyOneMain(loc))
         {
-            objmod->external_def("_main");
 #if TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
+            objmod->external_def("_main");
             objmod->ehsections();   // initialize exception handling sections
 #endif
 #if TARGET_WINDOS
-            if (!I64)
-            objmod->external_def("__acrtused_con");
+            if (I64)
+            {
+                objmod->external_def("main");
+                objmod->ehsections();   // initialize exception handling sections
+            }
+            else
+            {
+                objmod->external_def("_main");
+                objmod->external_def("__acrtused_con");
+            }
 #endif
             objmod->includelib(libname);
             s->Sclass = SCglobal;
@@ -671,7 +687,17 @@ void FuncDeclaration::toObjFile(int multiobj)
 #if TARGET_WINDOS
         else if (func->isWinMain() && onlyOneMain(loc))
         {
-            objmod->external_def("__acrtused");
+            if (I64)
+            {
+                objmod->includelib("uuid");
+                objmod->includelib("LIBCMT");
+                objmod->includelib("OLDNAMES");
+                objmod->ehsections();   // initialize exception handling sections
+            }
+            else
+            {
+                objmod->external_def("__acrtused");
+            }
             objmod->includelib(libname);
             s->Sclass = SCglobal;
         }
@@ -679,7 +705,17 @@ void FuncDeclaration::toObjFile(int multiobj)
         // Pull in RTL startup code
         else if (func->isDllMain() && onlyOneMain(loc))
         {
-            objmod->external_def("__acrtused_dll");
+            if (I64)
+            {
+                objmod->includelib("uuid");
+                objmod->includelib("LIBCMT");
+                objmod->includelib("OLDNAMES");
+                objmod->ehsections();   // initialize exception handling sections
+            }
+            else
+            {
+                objmod->external_def("__acrtused_dll");
+            }
             objmod->includelib(libname);
             s->Sclass = SCglobal;
         }
@@ -751,15 +787,18 @@ void FuncDeclaration::toObjFile(int multiobj)
             f->Fflags3 |= Fmember;
     }
 
-    Symbol **params;
-    unsigned pi;
-
     // Estimate number of parameters, pi
-    pi = (v_arguments != NULL);
+    size_t pi = (v_arguments != NULL);
     if (parameters)
         pi += parameters->dim;
-    // Allow extra 2 for sthis and shidden
-    params = (Symbol **)alloca((pi + 2) * sizeof(Symbol *));
+
+    // Create a temporary buffer, params[], to hold function parameters
+    Symbol *paramsbuf[10];
+    Symbol **params = paramsbuf;    // allocate on stack if possible
+    if (pi + 2 > 10)                // allow extra 2 for sthis and shidden
+    {   params = (Symbol **)malloc((pi + 2) * sizeof(Symbol *));
+        assert(params);
+    }
 
     // Get the actual number of parameters, pi, and fill in the params[]
     pi = 0;
@@ -847,19 +886,23 @@ void FuncDeclaration::toObjFile(int multiobj)
             if (fpr.alloc(sp->Stype, sp->Stype->Tty, &sp->Spreg, &sp->Spreg2))
             {
                 sp->Sclass = (config.exe == EX_WIN64) ? SCshadowreg : SCfastpar;
-                sp->Sfl = (sp->Sclass == SCshadowreg) ? FLpara : FLauto;
+                sp->Sfl = (sp->Sclass == SCshadowreg) ? FLpara : FLfast;
             }
         }
     }
 
-    if (func->fbody)
-    {   block *b;
-        Blockx bx;
-        Statement *sbody;
+    // Done with params
+    if (params != paramsbuf)
+        free(params);
+    params = NULL;
 
+    if (func->fbody)
+    {
         localgot = NULL;
 
-        sbody = func->fbody;
+        Statement *sbody = func->fbody;
+
+        Blockx bx;
         memset(&bx,0,sizeof(bx));
         bx.startblock = block_calloc();
         bx.curblock = bx.startblock;
@@ -869,53 +912,52 @@ void FuncDeclaration::toObjFile(int multiobj)
         bx.member = func;
         bx.module = getModule();
         irs.blx = &bx;
+
+        /* Doing this in semantic3() caused all kinds of problems:
+         * 1. couldn't reliably get the final mangling of the function name due to fwd refs
+         * 2. impact on function inlining
+         * 3. what to do when writing out .di files, or other pretty printing
+         */
+        if (global.params.trace)
+        {   /* Wrap the entire function body in:
+             *   trace_pro("funcname");
+             *   try
+             *     body;
+             *   finally
+             *     _c_trace_epi();
+             */
+            StringExp *se = new StringExp(Loc(), s->Sident);
+            se->type = new TypeDArray(Type::tchar->invariantOf());
+            se->type = se->type->semantic(Loc(), NULL);
+            Expressions *exps = new Expressions();
+            exps->push(se);
+            FuncDeclaration *fdpro = FuncDeclaration::genCfunc(Type::tvoid, "trace_pro");
+            Expression *ec = new VarExp(Loc(), fdpro);
+            Expression *e = new CallExp(Loc(), ec, exps);
+            e->type = Type::tvoid;
+            Statement *sp = new ExpStatement(loc, e);
+
+            FuncDeclaration *fdepi = FuncDeclaration::genCfunc(Type::tvoid, "_c_trace_epi");
+            ec = new VarExp(Loc(), fdepi);
+            e = new CallExp(Loc(), ec);
+            e->type = Type::tvoid;
+            Statement *sf = new ExpStatement(loc, e);
+
+            Statement *stf;
+            if (sbody->blockExit(tf->isnothrow) == BEfallthru)
+                stf = new CompoundStatement(Loc(), sbody, sf);
+            else
+                stf = new TryFinallyStatement(Loc(), sbody, sf);
+            sbody = new CompoundStatement(Loc(), sp, stf);
+        }
+
 #if DMDV2
         buildClosure(&irs);
 #endif
 
-#if 0
-        if (func->isSynchronized())
-        {
-            if (cd)
-            {   elem *esync;
-                if (func->isStatic())
-                {   // monitor is in ClassInfo
-                    esync = el_ptr(cd->toSymbol());
-                }
-                else
-                {   // 'this' is the monitor
-                    esync = el_var(sthis);
-                }
-
-                if (func->isStatic() || sbody->usesEH() ||
-                    !(config.flags2 & CFG2seh))
-                {   // BUG: what if frequire or fensure uses EH?
-
-                    sbody = new SynchronizedStatement(func->loc, esync, sbody);
-                }
-                else
-                {
 #if TARGET_WINDOS
-                    if (config.flags2 & CFG2seh)
-                    {
-                        /* The "jmonitor" uses an optimized exception handling frame
-                         * which is a little shorter than the more general EH frame.
-                         * It isn't strictly necessary.
-                         */
-                        s->Sfunc->Fflags3 |= Fjmonitor;
-                    }
-#endif
-                    el_free(esync);
-                }
-            }
-            else
-            {
-                error("synchronized function %s must be a member of a class", func->toChars());
-            }
-        }
-#elif TARGET_WINDOS
         if (func->isSynchronized() && cd && config.flags2 & CFG2seh &&
-            !func->isStatic() && !sbody->usesEH())
+            !func->isStatic() && !sbody->usesEH() && !global.params.trace)
         {
             /* The "jmonitor" hack uses an optimized exception handling frame
              * which is a little shorter than the more general EH frame.
@@ -933,7 +975,7 @@ void FuncDeclaration::toObjFile(int multiobj)
         if (isCtorDeclaration())
         {
             assert(sthis);
-            for (b = f->Fstartblock; b; b = b->Bnext)
+            for (block *b = f->Fstartblock; b; b = b->Bnext)
             {
                 if (b->BC == BCret)
                 {
@@ -997,7 +1039,7 @@ void FuncDeclaration::toObjFile(int multiobj)
 
     writefunc(s);
     if (isExport())
-        objmod->export_symbol(s, Poffset);
+        objmod->export_symbol(s, Para.offset);
 
     for (size_t i = 0; i < irs.deferToObj->dim; i++)
     {
@@ -1043,16 +1085,21 @@ void FuncDeclaration::toObjFile(int multiobj)
 
 bool onlyOneMain(Loc loc)
 {
+    static Loc lastLoc;
     static bool hasMain = false;
     if (hasMain)
     {
+        const char *msg = NULL;
+        if (global.params.addMain)
+            msg = ", -main switch added another main()";
 #if TARGET_WINDOS
-        error(loc, "only one main/WinMain/DllMain allowed");
+        error(lastLoc, "only one main/WinMain/DllMain allowed%s", msg ? msg : "");
 #else
-        error(loc, "only one main allowed");
+        error(lastLoc, "only one main allowed%s", msg ? msg : "");
 #endif
         return false;
     }
+    lastLoc = loc;
     hasMain = true;
     return true;
 }
@@ -1088,11 +1135,10 @@ unsigned Type::totym()
         case Tcomplex80: t = TYcldouble; break;
         case Tbool:     t = TYbool;     break;
         case Tchar:     t = TYchar;     break;
-#if TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
         case Twchar:    t = TYwchar_t;  break;
+#if TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
         case Tdchar:    t = TYdchar;    break;
 #else
-        case Twchar:    t = TYwchar_t;  break;
         case Tdchar:
                 t = (global.params.symdebug == 1) ? TYdchar : TYulong;
                 break;
@@ -1104,11 +1150,7 @@ unsigned Type::totym()
         case Tpointer:  t = TYnptr;     break;
         case Tdelegate: t = TYdelegate; break;
         case Tarray:    t = TYdarray;   break;
-#if SARRAYVALUE
         case Tsarray:   t = TYstruct;   break;
-#else
-        case Tsarray:   t = TYarray;    break;
-#endif
         case Tstruct:   t = TYstruct;   break;
 
         case Tenum:
@@ -1121,7 +1163,7 @@ unsigned Type::totym()
 #ifdef DEBUG
             printf("ty = %d, '%s'\n", ty, toChars());
 #endif
-            error(0, "forward reference of %s", toChars());
+            error(Loc(), "forward reference of %s", toChars());
             t = TYint;
             break;
 
@@ -1151,14 +1193,14 @@ unsigned Type::totym()
             static bool once = false;
             if (!once)
             {
-                if (global.params.is64bit || TARGET_OSX)
+                if (global.params.is64bit || global.params.isOSX)
                     ;
                 else
-                {   error(0, "SIMD vector types not supported on this platform");
+                {   error(Loc(), "SIMD vector types not supported on this platform");
                     once = true;
                 }
-                if (tv->size(0) == 32)
-                {   error(0, "AVX vector types not supported");
+                if (tv->size(Loc()) == 32)
+                {   error(Loc(), "AVX vector types not supported");
                     once = true;
                 }
             }
@@ -1217,6 +1259,7 @@ unsigned TypeFunction::totym()
             break;
 
         case LINKc:
+        case LINKcpp:
             tyf = TYnfunc;
 #if TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
             if (I32 && retStyle() == RETstack)
@@ -1226,10 +1269,6 @@ unsigned TypeFunction::totym()
 
         case LINKd:
             tyf = (varargs == 1) ? TYnfunc : TYjfunc;
-            break;
-
-        case LINKcpp:
-            tyf = TYnfunc;
             break;
 
         default:
@@ -1271,7 +1310,7 @@ Symbol *Module::gencritsec()
     s->Sfl = FLdata;
     /* Must match D_CRITICAL_SECTION in phobos/internal/critical.c
      */
-    dtnzeros(&s->Sdt, PTRSIZE + (I64 ? os_critsecsize64() : os_critsecsize32()));
+    dtnzeros(&s->Sdt, Target::ptrsize + (I64 ? os_critsecsize64() : os_critsecsize32()));
     outdata(s);
     return s;
 }
@@ -1286,11 +1325,8 @@ elem *Module::toEfilename()
     if (!sfilename)
     {
         dt_t *dt = NULL;
-        char *id;
-        int len;
-
-        id = srcfile->toChars();
-        len = strlen(id);
+        char *id = srcfile->toChars();
+        size_t len = strlen(id);
         dtsize_t(&dt, len);
         dtabytes(&dt,TYnptr, 0, len + 1, id);
 

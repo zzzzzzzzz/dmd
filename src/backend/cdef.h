@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -147,9 +146,9 @@ One and only one of these macros must be set by the makefile:
 #ifndef CDEF_H
 #define CDEF_H  1
 
-#define VERSION "8.54.0"        // for banner and imbedding in .OBJ file
-#define VERSIONHEX "0x854"      // for __DMC__ macro
-#define VERSIONINT 0x854        // for precompiled headers and DLL version
+#define VERSION "8.55.0"        // for banner and imbedding in .OBJ file
+#define VERSIONHEX "0x855"      // for __DMC__ macro
+#define VERSIONINT 0x855        // for precompiled headers and DLL version
 
 
 /***********************************
@@ -321,8 +320,6 @@ typedef long double longdouble;
 // For Shared Code Base
 #define TARGET_INLINEFUNC_NAMES
 #define PASCAL pascal
-#define HINT int
-#define UHINT unsigned int
 #if _WINDLL
 #define dbg_printf dll_printf
 #else
@@ -575,7 +572,7 @@ typedef targ_uns        targ_size_t;    /* size_t for the target machine */
 #define DATA    2       /* initialized data             */
 #define CDATA   3       /* constant data                */
 #define UDATA   4       /* uninitialized data           */
-#define UNKNOWN 0x7FFF  // unknown segment
+#define UNKNOWN -1      /* unknown segment              */
 #define DGROUPIDX 1     /* group index of DGROUP        */
 
 #define KEEPBITFIELDS 0 /* 0 means code generator cannot handle bit fields, */
@@ -604,28 +601,19 @@ typedef int bool;
 #define __ss
 #endif
 
-// gcc defines this for us, dmc doesn't, so look for it's __I86__
-#if ! (defined(LITTLE_ENDIAN) || defined(BIG_ENDIAN) )
-#if defined(__I86__) || defined(i386) || defined(__x86_64__)
-#define LITTLE_ENDIAN 1
-#else
-#error unknown platform, so unknown endianness
-#endif
-#endif
-
 #if _WINDLL
 #define COPYRIGHT "Copyright © 2001 Digital Mars"
 #else
 #ifdef DEBUG
-#define COPYRIGHT "Copyright (C) Digital Mars 2000-2010.  All Rights Reserved.\n\
+#define COPYRIGHT "Copyright (C) Digital Mars 2000-2013.  All Rights Reserved.\n\
 Written by Walter Bright\n\
 *****BETA TEST VERSION*****"
 #else
 #if linux
-#define COPYRIGHT "Copyright (C) Digital Mars 2000-2010.  All Rights Reserved.\n\
+#define COPYRIGHT "Copyright (C) Digital Mars 2000-2013.  All Rights Reserved.\n\
 Written by Walter Bright, Linux version by Pat Nelson"
 #else
-#define COPYRIGHT "Copyright (C) Digital Mars 2000-2010.  All Rights Reserved.\n\
+#define COPYRIGHT "Copyright (C) Digital Mars 2000-2013.  All Rights Reserved.\n\
 Written by Walter Bright"
 #endif
 #endif
@@ -684,6 +672,7 @@ struct Config
 #define CVDWARF_C 5             // Dwarf in C format
 #define CVDWARF_D 6             // Dwarf in D format
 #define CVSTABS 7               // Elf Stabs in C format
+#define CV8     8               // Codeview 8 symbolic info
 
     unsigned wflags;            // flags for Windows code generation
 #       define WFwindows 1      // generating code for Windows app or DLL
@@ -777,9 +766,10 @@ struct Config
 #define CFG2noerrmax    0x4000  // no error count maximum
 #define CFG2expand      0x8000  // expanded output to list file
 #define CFG2seh         0x10000 // use Win32 SEH to support any exception handling
+#define CFG2stomp       0x20000 // enable stack stomping code
 #define CFGX2   (CFG2warniserr | CFG2phuse | CFG2phgen | CFG2phauto | \
                  CFG2once | CFG2hdrdebug | CFG2noobj | CFG2noerrmax | \
-                 CFG2expand | CFG2nodeflib)
+                 CFG2expand | CFG2nodeflib | CFG2stomp)
     unsigned flags3;
 #define CFG3ju          1       // char == unsigned char
 #define CFG3eh          4       // generate exception handling stuff
@@ -940,7 +930,7 @@ union eve
         targ_uchar      Vuchar;
         targ_short      Vshort;
         targ_ushort     Vushort;
-        targ_int        Vint;    // also used for tmp numbers (FLtmp)
+        targ_int        Vint;
         targ_uns        Vuns;
         targ_long       Vlong;
         targ_ulong      Vulong;
@@ -1057,8 +1047,6 @@ typedef unsigned SYMFLGS;
     X(typedef,  0                )      /* type definition                      */ \
     X(explicit, 0                )      /* explicit                             */ \
     X(mutable,  0                )      /* mutable                              */ \
-    X(tmp,      SCEXP|SCSS|SCRD  )      /* compiler generated temporary (just like SCauto \
-                                           but doesn't overlay other SCauto's in scoping) */ \
     X(label,    0                )      /* goto label                           */ \
     X(struct,   SCKEP            )      /* struct/class/union tag name          */ \
     X(enum,     0                )      /* enum tag name                        */ \

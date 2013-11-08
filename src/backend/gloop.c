@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -329,10 +328,10 @@ void compdom()
  * Return !=0 if block A dominates block B.
  */
 
-HINT dom(block *A,block *B)
+bool dom(block *A,block *B)
 {
   assert(A && B && dfo && dfo[A->Bdfoidx] == A);
-  return vec_testbit(A->Bdfoidx,B->Bdom);
+  return vec_testbit(A->Bdfoidx,B->Bdom) != 0;
 }
 
 /**********************
@@ -932,6 +931,7 @@ STATIC void markinvar(elem *n,vec_t rd)
         case OPshlass:  case OPshrass:  case OPashrass:
         case OPpostinc: case OPpostdec:
         case OPcall:
+        case OPvecsto:
                         markinvar(n->E2,rd);
         case OPnegass:
                         n1 = n->E1;
@@ -1107,6 +1107,7 @@ STATIC void markinvar(elem *n,vec_t rd)
         case OPlt:      case OPle:      case OPgt:      case OPge:
         case OPashr:
         case OPror:     case OProl:
+        case OPbtst:
 
         case OPunord:   case OPlg:      case OPleg:     case OPule:
         case OPul:      case OPuge:     case OPug:      case OPue:

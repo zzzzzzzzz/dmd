@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -2712,7 +2711,7 @@ code *schedule(code *c,regm_t scratch)
     while (c)
     {
         if ((c->Iop == NOP ||
-             ((c->Iop & 0xFF) == ESCAPE && c->Iop != (ESCAPE | ESCadjfpu)) ||
+             ((c->Iop & ESCAPEmask) == ESCAPE && c->Iop != (ESCAPE | ESCadjfpu)) ||
              c->Iflags & CFclassinit) &&
             !(c->Iflags & (CFtarg | CFtarg2)))
         {   code *cn;

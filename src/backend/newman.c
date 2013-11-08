@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -1016,6 +1015,8 @@ STATIC void cpp_basic_data_type(type *t)
         case TYnptr:
             c = 'P' + cpp_cvidx(t->Tty);
             CHAR(c);
+            if(I64)
+                CHAR('E'); // __ptr64 modifier
             cpp_pointer_type(t);
             break;
         case TYstruct:
@@ -1313,8 +1314,7 @@ STATIC void cpp_this_type(type *tfunc,Classsym *stag)
     type_debug(tfunc);
     symbol_debug(stag);
 #if MARS
-    t = type_allocn(TYnptr, stag->Stype);
-    t->Tcount++;
+    t = type_pointer(stag->Stype);
 #else
     t = cpp_thistype(tfunc,stag);
 #endif

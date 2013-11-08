@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -19,8 +18,20 @@
 #include        <float.h>
 #include        <time.h>
 
-#if !defined(__OpenBSD__)
-// Mysteriously missing from OpenBSD
+#if defined __OpenBSD__
+    #include <sys/param.h>
+    #if OpenBSD < 201111 // 5.0
+        #define HAVE_FENV_H 0
+    #else
+        #define HAVE_FENV_H 1
+    #endif
+#elif _MSC_VER
+    #define HAVE_FENV_H 0
+#else
+    #define HAVE_FENV_H 1
+#endif
+
+#if HAVE_FENV_H
 #include        <fenv.h>
 #endif
 
@@ -30,6 +41,10 @@
 
 #if __FreeBSD__ || __OpenBSD__
 #define fmodl fmod
+#endif
+
+#if _MSC_VER
+#define isnan _isnan
 #endif
 
 #include        "cc.h"
@@ -48,19 +63,50 @@ static char __file__[] = __FILE__;      /* for tassert.h                */
 
 extern void error(const char *filename, unsigned linnum, const char *format, ...);
 
-#if linux || __APPLE__ || __FreeBSD__ || __sun
-int _status87()
-{
-    return fetestexcept(FE_ALL_EXCEPT);
-}
+#if __DMC__
+    #define HAVE_FLOAT_EXCEPT 1
 
-void _clear87()
-{
-    feclearexcept(FE_ALL_EXCEPT);
-}
+    static int testFE()
+    {
+        return _status87() & 0x3F;
+    }
+
+    static void clearFE()
+    {
+        _clear87();
+    }
+#elif HAVE_FENV_H
+    #define HAVE_FLOAT_EXCEPT 1
+
+    static int testFE()
+    {
+        return fetestexcept(FE_ALL_EXCEPT);
+    }
+
+    static void clearFE()
+    {
+        feclearexcept(FE_ALL_EXCEPT);
+    }
+#elif defined _MSC_VER && TX86
+    #define HAVE_FLOAT_EXCEPT 1
+
+    static int testFE()
+    {
+        return _status87() & 0x3F;
+    }
+
+    static void clearFE()
+    {
+        _clear87();
+    }
+#else
+    #define HAVE_FLOAT_EXCEPT 0
+    static int  testFE() { return 1; }
+    static void clearFE() { }
 #endif
 
-CEXTERN elem * evalu8(elem *);
+
+elem * evalu8(elem *, goal_t);
 
 /* When this !=0, we do constant folding on floating point constants
  * even if they raise overflow, underflow, invalid, etc. exceptions.
@@ -102,7 +148,7 @@ FM1:    // We don't use fprem1 because for some inexplicable
  * Return boolean result of constant elem.
  */
 
-HINT boolres(elem *e)
+int boolres(elem *e)
 {   int b;
 
     //printf("boolres()\n");
@@ -243,7 +289,7 @@ HINT boolres(elem *e)
  * Return TRUE if expression will always evaluate to TRUE.
  */
 
-HINT iftrue(elem *e)
+int iftrue(elem *e)
 {
   while (1)
   {
@@ -268,7 +314,7 @@ HINT iftrue(elem *e)
  * Return TRUE if expression will always evaluate to FALSE.
  */
 
-HINT iffalse(elem *e)
+int iffalse(elem *e)
 {
         while (1)
         {       assert(e);
@@ -523,7 +569,7 @@ elem *poptelem(elem *e)
                 e->E2 = poptelem(e->E2);
             }
         eval:
-            e = evalu8(e);
+            e = evalu8(e, GOALvalue);
             break;
     }
 ret:
@@ -553,7 +599,7 @@ elem *selecte1(elem *e,type *t)
  * Return with the result.
  */
 
-elem * evalu8(elem *e)
+elem * evalu8(elem *e, goal_t goal)
 {   elem *e1,*e2;
     tym_t tym,tym2,uns;
     unsigned op;
@@ -605,9 +651,7 @@ elem * evalu8(elem *e)
             return e;
 #endif
         esave = *e;
-#if TX86 && !__OpenBSD__ && !__HAIKU__
-        _clear87();
-#endif
+        clearFE();
     }
     else
         return e;
@@ -1520,6 +1564,12 @@ elem * evalu8(elem *e)
 #endif
         break;
 
+    case OPbtst:
+        if ((targ_ullong) i2 > sizeof(targ_ullong) * 8)
+            i2 = sizeof(targ_ullong) * 8;
+        e->EV.Vullong = (((targ_ullong) l1) >> i2) & 1;
+        break;
+
 #if MARS
     case OPashr:
         if ((targ_ullong) i2 > sizeof(targ_ullong) * 8)
@@ -1991,13 +2041,7 @@ elem * evalu8(elem *e)
     int flags;
 
     if (!ignore_exceptions &&
-        (config.flags4 & CFG4fastfloat) == 0 &&
-#if __OpenBSD__ || __HAIKU__
-        1                    // until OpenBSD supports C standard fenv.h
-#else
-        _status87() & 0x3F
-#endif
-       )
+        (config.flags4 & CFG4fastfloat) == 0 && testFE())
     {
         // Exceptions happened. Do not fold the constants.
         *e = esave;

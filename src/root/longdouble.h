@@ -18,7 +18,7 @@
 typedef real_t longdouble;
 
 template<typename T> longdouble ldouble(T x) { return (longdouble) x; }
-inline int ld_sprint(char* str, int fmt, longdouble x)
+inline size_t ld_sprint(char* str, int fmt, longdouble x)
 {
     if(fmt == 'a' || fmt == 'A')
         return x.formatHex(buffer, 46); // don't know the size here, but 46 is the max
@@ -34,11 +34,22 @@ typedef volatile long double volatile_longdouble;
 // template<typename T> longdouble ldouble(T x) { return (longdouble) x; }
 #define ldouble(x) ((longdouble)(x))
 
-inline int ld_sprint(char* str, int fmt, longdouble x)
+inline size_t ld_sprint(char* str, int fmt, longdouble x)
 {
-    char sfmt[4] = "%Lg";
-    sfmt[2] = fmt;
-    return sprintf(str, sfmt, x);
+    if (((longdouble)(unsigned long long)x) == x)
+    {   // ((1.5 -> 1 -> 1.0) == 1.5) is false
+        // ((1.0 -> 1 -> 1.0) == 1.0) is true
+        // see http://en.cppreference.com/w/cpp/io/c/fprintf
+        char sfmt[5] = "%#Lg";
+        sfmt[3] = fmt;
+        return sprintf(str, sfmt, x);
+    }
+    else
+    {
+        char sfmt[4] = "%Lg";
+        sfmt[2] = fmt;
+        return sprintf(str, sfmt, x);
+    }
 }
 
 #else
@@ -247,7 +258,7 @@ public:
 //_STCONSDEF(numeric_limits<longdouble>, int, min_exponent)
 //_STCONSDEF(numeric_limits<longdouble>, int, min_exponent10)
 
-int ld_sprint(char* str, int fmt, longdouble x);
+size_t ld_sprint(char* str, int fmt, longdouble x);
 
 #endif // !_MSC_VER
 

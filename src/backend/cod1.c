@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -284,10 +283,10 @@ void genEEcode()
     eecontext.EEin++;
     regcon.immed.mval = 0;
     retregs = 0;    //regmask(eecontext.EEelem->Ety);
-    assert(EEoffset >= REGSIZE);
-    c = cod3_stackadj(NULL, EEoffset - REGSIZE);
+    assert(EEStack.offset >= REGSIZE);
+    c = cod3_stackadj(NULL, EEStack.offset - REGSIZE);
     gen1(c,0x50 + SI);                      // PUSH ESI
-    genadjesp(c,EEoffset);
+    genadjesp(c,EEStack.offset);
     c = gencodelem(c,eecontext.EEelem,&retregs, FALSE);
     assignaddrc(c);
     pinholeopt(c,NULL);
@@ -298,12 +297,15 @@ void genEEcode()
 
 /********************************************
  * Gen a save/restore sequence for mask of registers.
+ * Returns:
+ *      amount of stack consumed
  */
 
-void gensaverestore2(regm_t regm,code **csave,code **crestore)
+unsigned gensaverestore2(regm_t regm,code **csave,code **crestore)
 {
     code *cs1 = *csave;
     code *cs2 = *crestore;
+    unsigned stackused = 0;
 
     //printf("gensaverestore2(%s)\n", regm_str(regm));
     regm &= mBP | mES | ALLREGS | XMMREGS | mST0 | mST01;
@@ -313,6 +315,7 @@ void gensaverestore2(regm_t regm,code **csave,code **crestore)
         {
             if (i == ES)
             {
+                stackused += REGSIZE;
                 cs1 = gen1(cs1, 0x06);                  // PUSH ES
                 cs2 = cat(gen1(CNIL, 0x07),cs2);        // POP  ES
             }
@@ -320,13 +323,14 @@ void gensaverestore2(regm_t regm,code **csave,code **crestore)
             {
                 gensaverestore87(1 << i, &cs1, &cs2);
             }
-            else if (i >= XMM0)
+            else if (i >= XMM0 || I64)
             {   unsigned idx;
                 cs1 = regsave.save(cs1, i, &idx);
                 cs2 = regsave.restore(cs2, i, idx);
             }
             else
             {
+                stackused += REGSIZE;
                 cs1 = gen1(cs1,0x50 + (i & 7));         // PUSH i
                 code *c = gen1(NULL, 0x58 + (i & 7));   // POP  i
                 if (i & 8)
@@ -340,13 +344,14 @@ void gensaverestore2(regm_t regm,code **csave,code **crestore)
     }
     *csave = cs1;
     *crestore = cs2;
+    return stackused;
 }
 
-void gensaverestore(regm_t regm,code **csave,code **crestore)
+unsigned gensaverestore(regm_t regm,code **csave,code **crestore)
 {
     *csave = NULL;
     *crestore = NULL;
-    gensaverestore2(regm, csave, crestore);
+    return gensaverestore2(regm, csave, crestore);
 }
 
 /****************************************
@@ -543,8 +548,8 @@ code *loadea(elem *e,code *cs,unsigned op,unsigned reg,targ_size_t offset,
 
 #ifdef DEBUG
   if (debugw)
-    printf("loadea: e=%p cs=%p op=x%x reg=%d offset=%lld keepmsk=x%x desmsk=x%x\n",
-            e,cs,op,reg,(unsigned long long)offset,keepmsk,desmsk);
+    printf("loadea: e=%p cs=%p op=x%x reg=%d offset=%lld keepmsk=%s desmsk=%s\n",
+            e,cs,op,reg,(unsigned long long)offset,regm_str(keepmsk),regm_str(desmsk));
 #endif
 
   assert(e);
@@ -768,7 +773,7 @@ code *getlvalue(code *pcs,elem *e,regm_t keepmsk)
   tym_t e1ty;
   symbol *s;
 
-  //printf("getlvalue(e = %p, keepmsk = x%x)\n",e,(unsigned)keepmsk);
+  //printf("getlvalue(e = %p, keepmsk = %s)\n",e,regm_str(keepmsk));
   //elem_print(e);
   assert(e);
   elem_debug(e);
@@ -789,7 +794,7 @@ code *getlvalue(code *pcs,elem *e,regm_t keepmsk)
   unsigned sz = tysize(ty);
   if (tyfloating(ty))
         objmod->fltused();
-  if (I64 && (sz == 8 || sz == 16))
+  if (I64 && (sz == 8 || sz == 16) && !tyvector(ty))
         pcs->Irex |= REX_W;
   if (!I16 && sz == SHORTSIZE)
         pcs->Iflags |= CFopsize;
@@ -828,7 +833,7 @@ code *getlvalue(code *pcs,elem *e,regm_t keepmsk)
 #endif
     case FLoper:
 #ifdef DEBUG
-        if (debugw) printf("getlvalue(e = %p, km = x%x)\n",e,keepmsk);
+        if (debugw) printf("getlvalue(e = %p, keepmsk = %s)\n", e, regm_str(keepmsk));
 #endif
         switch (e->Eoper)
         {
@@ -1040,7 +1045,7 @@ code *getlvalue(code *pcs,elem *e,regm_t keepmsk)
             }
             if (f == FLpara)
                 refparam = TRUE;
-            else if (f == FLauto || f == FLtmp || f == FLbprel || f == FLfltreg)
+            else if (f == FLauto || f == FLbprel || f == FLfltreg || f == FLfast)
                 reflocal = TRUE;
 #if TARGET_SEGMENTED
             else if (f == FLcsdata || tybasic(e12->Ety) == TYcptr)
@@ -1077,6 +1082,7 @@ code *getlvalue(code *pcs,elem *e,regm_t keepmsk)
 #endif
                 opsave = pcs->Iop;
                 flagsave = pcs->Iflags;
+                unsigned char rexsave = pcs->Irex;
                 pcs->Iop = 0x8D;
                 code_newreg(pcs, reg);
                 if (!I16)
@@ -1086,7 +1092,9 @@ code *getlvalue(code *pcs,elem *e,regm_t keepmsk)
                 c = gen(c,pcs);                 /* LEA idxreg,EA        */
                 cssave(e1,idxregs,TRUE);
                 if (!I16)
-                    pcs->Iflags = flagsave;
+                {   pcs->Iflags = flagsave;
+                    pcs->Irex = rexsave;
+                }
                 if (stackfl[f] && (config.wflags & WFssneds))   // if pointer into stack
                     pcs->Iflags |= CFss;        // add SS: override
                 pcs->Iop = opsave;
@@ -1272,6 +1280,7 @@ code *getlvalue(code *pcs,elem *e,regm_t keepmsk)
         goto L2;
 
     case FLauto:
+    case FLfast:
         if (s->Sclass == SCfastpar)
         {
     Lauto:
@@ -1308,7 +1317,6 @@ code *getlvalue(code *pcs,elem *e,regm_t keepmsk)
         }
         if (s->Sclass == SCshadowreg)
             goto Lpara;
-    case FLtmp:
     case FLbprel:
         reflocal = TRUE;
         pcs->Irm = modregrm(2,0,BPRM);
@@ -1548,8 +1556,8 @@ code *tstresult(regm_t regm,tym_t tym,unsigned saveflag)
 
 #ifdef DEBUG
   //if (!(regm & (mBP | ALLREGS)))
-  //      printf("tstresult(regm = %s, tym = x%x, saveflag = %d)\n",
-  //          regm_str(regm),tym,saveflag);
+        //printf("tstresult(regm = %s, tym = x%x, saveflag = %d)\n",
+            //regm_str(regm),tym,saveflag);
 #endif
   assert(regm & (XMMREGS | mBP | ALLREGS));
   tym = tybasic(tym);
@@ -1761,7 +1769,7 @@ code *fixresult(elem *e,regm_t retregs,regm_t *pretregs)
             }
             else
 #ifdef DEBUG
-                printf("retregs = x%x, forregs = x%x\n",retregs,forregs),
+                printf("retregs = %s, forregs = %s\n", regm_str(retregs), regm_str(forregs)),
 #endif
                 assert(0);
             if (EOP(e))
@@ -1832,8 +1840,8 @@ code *fixresult(elem *e,regm_t retregs,regm_t *pretregs)
         }
         c = cat(c,ce);
         cssave(e,retregs | *pretregs,opsflag);
-        forregs = 0;                    /* don't care about result in reg  */
-                                        /* cuz we have real result in rreg */
+        // Commented out due to Bugzilla 8840
+        //forregs = 0;    // don't care about result in reg cuz real result is in rreg
         retregs = *pretregs & ~mPSW;
   }
   if (forccs)                           /* if return result in flags    */
@@ -1950,6 +1958,11 @@ code *callclib(elem *e,unsigned clib,regm_t *pretregs,regm_t keepmask)
   };
   static symbol clibldiv2  = Y(mAX|mBX|mCX|mDX,"_LDIV2__");
   static symbol clibuldiv2 = Y(mAX|mBX|mCX|mDX,"_ULDIV2__");
+
+  static symbol clibldiv3  = Y(mAX|mBX|mCX|mDX,"_divdi3");
+  static symbol clibuldiv3 = Y(mAX|mBX|mCX|mDX,"_udivdi3");
+  static symbol cliblmod3  = Y(mAX|mBX|mCX|mDX,"_moddi3");
+  static symbol clibulmod3 = Y(mAX|mBX|mCX|mDX,"_umoddi3");
 #else
   static symbol lib[CLIBMAX] =
   {
@@ -2149,12 +2162,28 @@ code *callclib(elem *e,unsigned clib,regm_t *pretregs,regm_t keepmask)
 #if TARGET_LINUX || TARGET_OSX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
         clibldiv2.Stype = tsclib;
         clibuldiv2.Stype = tsclib;
+        clibldiv3.Stype = tsclib;
+        clibuldiv3.Stype = tsclib;
+        cliblmod3.Stype = tsclib;
+        clibulmod3.Stype = tsclib;
 #if MARS
         clibldiv2.Sxtrnnum = 0;
         clibldiv2.Stypidx = 0;
 
         clibuldiv2.Sxtrnnum = 0;
         clibuldiv2.Stypidx = 0;
+
+        clibldiv3.Sxtrnnum = 0;
+        clibldiv3.Stypidx = 0;
+
+        clibuldiv3.Sxtrnnum = 0;
+        clibuldiv3.Stypidx = 0;
+
+        cliblmod3.Sxtrnnum = 0;
+        cliblmod3.Stypidx = 0;
+
+        clibulmod3.Sxtrnnum = 0;
+        clibulmod3.Stypidx = 0;
 #endif
 #endif
         if (!I16)
@@ -2253,9 +2282,38 @@ code *callclib(elem *e,unsigned clib,regm_t *pretregs,regm_t keepmask)
         code *cgot = NULL;
         bool pushebx = false;
 #if TARGET_LINUX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
-        if (config.flags3 & CFG3pic && I32)
+        if (I32)
         {
-            cgot = load_localgot();     // EBX gets set to this value
+            /* Pass EBX on the stack instead, this is because EBX is used
+             * for shared library function calls
+             */
+            if (config.flags3 & CFG3pic)
+            {
+                cgot = load_localgot();     // EBX gets set to this value
+            }
+#if TARGET_LINUX
+            switch (clib)
+            {
+                case CLIBldiv:
+                    s = &clibldiv3;
+                    pushebx = true;
+                    break;
+                case CLIBlmod:
+                    s = &cliblmod3;
+                    pushebx = true;
+                    info[clib].retregs32 = mAX|mDX;
+                    break;
+                case CLIBuldiv:
+                    s = &clibuldiv3;
+                    pushebx = true;
+                    break;
+                case CLIBulmod:
+                    s = &clibulmod3;
+                    pushebx = true;
+                    info[clib].retregs32 = mAX|mDX;
+                    break;
+            }
+#else
             switch (clib)
             {   // EBX is a parameter to these, so push it on the stack before load_localgot()
                 case CLIBldiv:
@@ -2269,6 +2327,7 @@ code *callclib(elem *e,unsigned clib,regm_t *pretregs,regm_t keepmask)
                     pushebx = true;
                     break;
             }
+#endif
         }
 #endif
         makeitextern(s);
@@ -2282,8 +2341,17 @@ code *callclib(elem *e,unsigned clib,regm_t *pretregs,regm_t keepmask)
             }
         }
         if (pushebx)
-        {   c = gen1(c, 0x50 + BX);                             // PUSH EBX
+        {
+#if TARGET_LINUX
+            c = gen1(c, 0x50 + CX);                             // PUSH ECX
+            c = gen1(c, 0x50 + BX);                             // PUSH EBX
+            c = gen1(c, 0x50 + DX);                             // PUSH EDX
+            c = gen1(c, 0x50 + AX);                             // PUSH EAX
+            nalign += 4 * REGSIZE;
+#else
+            c = gen1(c, 0x50 + BX);                             // PUSH EBX
             nalign += REGSIZE;
+#endif
         }
         c = cat(c, cgot);                                       // EBX = localgot
         c = gencs(c,(LARGECODE) ? 0x9A : 0xE8,0,FLfunc,s);      // CALL s
@@ -2404,7 +2472,7 @@ static int type_jparam2(type *t, tym_t ty)
         type_debug(t);
         targ_size_t sz = type_size(t);
         return (sz <= NPTRSIZE) &&
-               (sz == 1 || sz == 2 || sz == 4 || sz == 8);
+               (config.exe == EX_WIN64 || sz == 1 || sz == 2 || sz == 4 || sz == 8);
     }
     else if (tysize(ty) <= NPTRSIZE)
         return 1;
@@ -2424,48 +2492,65 @@ int FuncParamRegs::alloc(type *t, tym_t ty, reg_t *preg1, reg_t *preg2)
     // If struct just wraps another type
     if (tybasic(ty) == TYstruct && tybasic(t->Tty) == TYstruct)
     {
-        type *targ1 = t->Ttag->Sstruct->Sarg1type;
-        type *targ2 = t->Ttag->Sstruct->Sarg2type;
-        if (targ1)
+        if (config.exe == EX_WIN64)
         {
-            t = targ1;
-            ty = t->Tty;
-            if (targ2)
-            {
-                t2 = targ2;
-                ty2 = t2->Tty;
-            }
+            /* Structs occupy a general purpose register, regardless of the struct
+             * size or the number & types of its fields.
+             */
+            t = NULL;
+            ty = TYnptr;
         }
-        else if (I64 && !targ2)
-            return 0;
+        else
+        {
+            type *targ1 = t->Ttag->Sstruct->Sarg1type;
+            type *targ2 = t->Ttag->Sstruct->Sarg2type;
+            if (targ1)
+            {
+                t = targ1;
+                ty = t->Tty;
+                if (targ2)
+                {
+                    t2 = targ2;
+                    ty2 = t2->Tty;
+                }
+            }
+            else if (I64 && !targ2)
+                return 0;
+        }
     }
 
     reg_t *preg = preg1;
     int regcntsave = regcnt;
     int xmmcntsave = xmmcnt;
 
-    if (I64 &&
-        (tybasic(ty) == TYcent || tybasic(ty) == TYucent) &&
-        numintegerregs - regcnt >= 2 &&
-        config.exe != EX_WIN64)
+    if (config.exe == EX_WIN64)
     {
-        // Allocate to register pair
-        *preg1 = argregs[regcnt];
-        *preg2 = argregs[regcnt + 1];
-        regcnt += 2;
-        return 1;
+        if (tybasic(ty) == TYcfloat)
+        {
+            ty = TYnptr;                // treat like a struct
+        }
     }
-
-    if (I64 &&
-        config.exe != EX_WIN64 &&
-        tybasic(ty) == TYcdouble &&
-        numfloatregs - xmmcnt >= 2)
+    else if (I64)
     {
-        // Allocate to register pair
-        *preg1 = floatregs[xmmcnt];
-        *preg2 = floatregs[xmmcnt + 1];
-        xmmcnt += 2;
-        return 1;
+        if ((tybasic(ty) == TYcent || tybasic(ty) == TYucent) &&
+            numintegerregs - regcnt >= 2)
+        {
+            // Allocate to register pair
+            *preg1 = argregs[regcnt];
+            *preg2 = argregs[regcnt + 1];
+            regcnt += 2;
+            return 1;
+        }
+
+        if (tybasic(ty) == TYcdouble &&
+            numfloatregs - xmmcnt >= 2)
+        {
+            // Allocate to register pair
+            *preg1 = floatregs[xmmcnt];
+            *preg2 = floatregs[xmmcnt + 1];
+            xmmcnt += 2;
+            return 1;
+        }
     }
 
     for (int j = 0; j < 2; j++)
@@ -2744,21 +2829,29 @@ code *cdfunc(elem *e,regm_t *pretregs)
                         ty2 = targ2->Tty;
                 }
 
-                if (preg != lreg)
-                    if (mask[preg] & XMMREGS)
-                    {   unsigned op = xmmload(ty1);                     // MOVSS/D preg,lreg
-                        c1 = gen2(c1,op,modregxrmx(3,preg-XMM0,lreg-XMM0));
+                for (int v = 0; v < 2; v++)
+                {
+                    if (v ^ (preg != mreg))
+                    {
+                        if (preg != lreg)
+                            if (mask[preg] & XMMREGS)
+                            {   unsigned op = xmmload(ty1);            // MOVSS/D preg,lreg
+                                c1 = gen2(c1,op,modregxrmx(3,preg-XMM0,lreg-XMM0));
+                            }
+                            else
+                                c1 = genmovreg(c1, preg, lreg);
                     }
                     else
-                        c1 = genmovreg(c1, preg, lreg);
-
-                if (preg2 != mreg)
-                    if (mask[preg2] & XMMREGS)
-                    {   unsigned op = xmmload(ty2);                     // MOVSS/D preg2,mreg
-                        c1 = gen2(c1,op,modregxrmx(3,preg2-XMM0,mreg-XMM0));
+                    {
+                        if (preg2 != mreg)
+                            if (mask[preg2] & XMMREGS)
+                            {   unsigned op = xmmload(ty2);            // MOVSS/D preg2,mreg
+                                c1 = gen2(c1,op,modregxrmx(3,preg2-XMM0,mreg-XMM0));
+                            }
+                            else
+                                c1 = genmovreg(c1, preg2, mreg);
                     }
-                    else
-                        c1 = genmovreg(c1, preg2, mreg);
+                }
 
                 c = cat4(c,csave,cp,c1);
                 retregs = mask[preg] | mask[preg2];
@@ -2768,11 +2861,14 @@ code *cdfunc(elem *e,regm_t *pretregs)
                 code *c1 = getregs(retregs);
                 // LEA preg,np[RSP]
                 unsigned np = stackpush - ep->EV.Vuns;   // stack delta to parameter
-                code *c2 = genc1(CNIL,0x8D,
+                code *c2 = genc1(CNIL,LEA,
                         (modregrm(0,4,SP) << 8) | modregxrm(2,preg,4), FLconst,np);
                 if (I64)
                     code_orrex(c2, REX_W);
                 c = cat3(c,c1,c2);
+            }
+            else if (ep->Eoper == OPstrpar && config.exe == EX_WIN64 && type_size(ep->ET) == 0)
+            {
             }
             else
             {
@@ -2875,7 +2971,7 @@ STATIC code * funccall(elem *e,unsigned numpara,unsigned numalign,regm_t *pretre
     regm_t retregs;
     symbol *s;
 
-    //printf("funccall(e = %p, *pretregs = x%x, numpara = %d, numalign = %d)\n",e,*pretregs,numpara,numalign);
+    //printf("funccall(e = %p, *pretregs = %s, numpara = %d, numalign = %d)\n",e,regm_str(*pretregs),numpara,numalign);
     calledafunc = 1;
     /* Determine if we need frame for function prolog/epilog    */
 #if TARGET_WINDOS
@@ -2958,7 +3054,7 @@ STATIC code * funccall(elem *e,unsigned numpara,unsigned numalign,regm_t *pretre
             }
 #endif
             ce = gencs(ce,farfunc ? 0x9A : 0xE8,0,fl,s);      // CALL extern
-            ce->Iflags |= farfunc ? (CFseg | CFoff) : (CFselfrel | CFoff);
+            code_orflag(ce, farfunc ? (CFseg | CFoff) : (CFselfrel | CFoff));
 #if TARGET_LINUX || TARGET_FREEBSD || TARGET_OPENBSD || TARGET_SOLARIS
             if (s == tls_get_addr_sym)
             {
@@ -3471,9 +3567,24 @@ code *params(elem *e,unsigned stackalign)
                     break;
                 if (I32)
                 {
-                    assert(sz == REGSIZE * 2);
-                    ce = loadea(e,&cs,0xFF,6,REGSIZE,0,0); /* PUSH EA+4 */
+                    assert(sz >= REGSIZE * 2);
+                    ce = loadea(e,&cs,0xFF,6,sz - REGSIZE,0,0); /* PUSH EA+4 */
                     ce = genadjesp(ce,REGSIZE);
+                    stackpush += REGSIZE;
+                    sz -= REGSIZE;
+
+                    if (sz > REGSIZE)
+                    {
+                        while (sz)
+                        {
+                            cs.IEVoffset1 -= REGSIZE;
+                            ce = gen(ce,&cs);                    // PUSH EA+...
+                            ce = genadjesp(ce,REGSIZE);
+                            stackpush += REGSIZE;
+                            sz -= REGSIZE;
+                        }
+                        goto L2;
+                    }
                 }
                 else
                 {
@@ -4126,7 +4237,7 @@ code *loaddata(elem *e,regm_t *pretregs)
 #ifdef DEBUG
         if (!(forregs & BYTEREGS))
         {       elem_print(e);
-                printf("forregs = x%x\n",forregs);
+                printf("forregs = %s\n", regm_str(forregs));
         }
 #endif
         int op = 0x8A;                                  // byte MOV
@@ -4154,7 +4265,6 @@ code *loaddata(elem *e,regm_t *pretregs)
     else if (forregs & XMMREGS)
     {
         // Can't load from registers directly to XMM regs
-//printf("test2 %s\n", e->EV.sp.Vsym->Sident);
         //e->EV.sp.Vsym->Sflags &= ~GTregcand;
 
         op = xmmload(tym);
@@ -4204,7 +4314,7 @@ code *loaddata(elem *e,regm_t *pretregs)
             ce->Iflags |= CFopsize;                     /* seg is 16 bits */
         c = cat(c,ce);
         reg = findreglsw(forregs);
-        ce = loadea(e,&cs,0x8B,reg,0,forregs,0);
+        ce = loadea(e,&cs,0x8B,reg,0,forregs,0);        // MOV reg,data
         c = cat(c,ce);
     }
     else if (sz >= 8)

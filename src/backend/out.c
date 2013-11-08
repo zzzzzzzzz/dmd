@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -193,7 +192,10 @@ void outdata(symbol *s)
                             objmod->lidata(pseg->SDseg, pseg->SDoffset, datasize);
 #endif
 #if OMFOBJ
-                            pseg->SDoffset += datasize;
+                            if (config.exe == EX_WIN64)
+                                objmod->lidata(pseg->SDseg, pseg->SDoffset, datasize);
+                            else
+                                pseg->SDoffset += datasize;
 #endif
                             s->Sfl = FLtlsdata;
                             break;
@@ -244,9 +246,6 @@ void outdata(symbol *s)
             }
             case DT_coff:
                 datasize += size(dt->Dty);
-                break;
-            case DT_1byte:
-                datasize++;
                 break;
             default:
 #ifdef DEBUG
@@ -407,7 +406,7 @@ void outdata(symbol *s)
                     flags = CFoff;
                 else
                     flags = CFoff | CFseg;
-                if (I64)
+                if (I64 && tysize(dt->Dty) == 8)
                     flags |= CFoffset64;
                 offset += objmod->reftoident(seg,offset,sb,a,flags);
                 break;
@@ -415,9 +414,6 @@ void outdata(symbol *s)
             case DT_coff:
                 objmod->reftocodeseg(seg,offset,dt->DToffset);
                 offset += intsize;
-                break;
-            case DT_1byte:
-                objmod->byte(seg,offset++,dt->DTonebyte);
                 break;
             default:
 #ifdef DEBUG
@@ -665,7 +661,6 @@ again:
             case SCregister:
             case SCfastpar:
             case SCbprel:
-            case SCtmp:
                 if (e->Eoper == OPrelconst)
                 {
                     s->Sflags &= ~(SFLunambig | GTregcand);
@@ -865,7 +860,6 @@ STATIC void out_regcand_walk(elem *e)
                         break;
                     case SCauto:
                     case SCregister:
-                    case SCtmp:
                     case SCfastpar:
                     case SCbprel:
                         s->Sflags &= ~(SFLunambig | GTregcand);
@@ -1051,9 +1045,6 @@ STATIC void writefunc2(symbol *sfunc)
         s->Sflags &= ~(SFLunambig | GTregcand);
         switch (s->Sclass)
         {
-            case SCtmp:
-                s->Sfl = FLtmp;
-                goto L3;
             case SCbprel:
                 s->Sfl = FLbprel;
                 goto L3;
@@ -1071,13 +1062,13 @@ STATIC void writefunc2(symbol *sfunc)
                     assert(s->Spreg2 == NOREG);
                     assert(si == 0);
                     s->Sclass = SCfastpar;
-                    s->Sfl = FLauto;
+                    s->Sfl = FLfast;
                     goto L3;
                 }
                 assert(s->Sclass != SCfastpar);
 #else
             case SCfastpar:
-                s->Sfl = FLauto;
+                s->Sfl = FLfast;
                 goto L3;
             case SCregpar:
             case SCparameter:
@@ -1237,21 +1228,6 @@ STATIC void writefunc2(symbol *sfunc)
     PARSER = 1;
 #endif
     objmod->func_term(sfunc);
-#if MARS
-    /* This is to make uplevel references to SCfastpar variables
-     * from nested functions work.
-     */
-    for (si = 0; si < globsym.top; si++)
-    {
-        Symbol *s = globsym.tab[si];
-
-        switch (s->Sclass)
-        {   case SCfastpar:
-                s->Sclass = SCauto;
-                break;
-        }
-    }
-#endif
     if (eecontext.EEcompile == 1)
         goto Ldone;
     if (sfunc->Sclass == SCglobal)
@@ -1337,12 +1313,25 @@ STATIC void writefunc2(symbol *sfunc)
         sfunc->Sclass != SCsinline &&
         !(sfunc->Sclass == SCinline && !(config.flags2 & CFG2comdat)) &&
         sfunc->ty() & mTYexport)
-        objmod->export_symbol(sfunc,Poffset);      // export function definition
+        objmod->export_symbol(sfunc,Para.offset);      // export function definition
 
-    if (config.fulltypes)
+    if (config.fulltypes && config.fulltypes != CV8)
         cv_func(sfunc);                 // debug info for function
 
 #if MARS
+    /* This is to make uplevel references to SCfastpar variables
+     * from nested functions work.
+     */
+    for (si = 0; si < globsym.top; si++)
+    {
+        Symbol *s = globsym.tab[si];
+
+        switch (s->Sclass)
+        {   case SCfastpar:
+                s->Sclass = SCauto;
+                break;
+        }
+    }
     /* After codgen() and writing debug info for the locals,
      * readjust the offsets of all stack variables so they
      * are relative to the frame pointer.

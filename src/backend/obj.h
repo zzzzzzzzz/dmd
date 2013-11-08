@@ -4,8 +4,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -29,7 +28,7 @@ struct Obj
     static Obj *init(Outbuffer *, const char *filename, const char *csegname);
     VIRTUAL void initfile(const char *filename, const char *csegname, const char *modname);
     VIRTUAL void termfile();
-    VIRTUAL void term();
+    VIRTUAL void term(const char *objfilename);
 
     VIRTUAL size_t mangle(Symbol *s,char *dest);
     VIRTUAL void import(elem *e);
@@ -96,6 +95,9 @@ struct Obj
     static void refGOTsym();
 #endif
 
+#if TARGET_WINDOS
+    VIRTUAL int seg_debugT();           // where the symbolic debug type data goes
+#endif
 };
 
 struct ElfObj : Obj
@@ -109,7 +111,7 @@ struct ElfObj : Obj
 struct MachObj : Obj
 {
     static int getsegment(const char *sectname, const char *segname,
-        int align, int flags, int flags2 = 0);
+        int align, int flags);
     static void addrel(int seg, targ_size_t offset, symbol *targsym,
         unsigned targseg, int rtype, int val = 0);
 };
@@ -119,7 +121,7 @@ struct MsCoffObj : Obj
     static MsCoffObj *init(Outbuffer *, const char *filename, const char *csegname);
     VIRTUAL void initfile(const char *filename, const char *csegname, const char *modname);
     VIRTUAL void termfile();
-    VIRTUAL void term();
+    VIRTUAL void term(const char *objfilename);
 
 //    VIRTUAL size_t mangle(Symbol *s,char *dest);
 //    VIRTUAL void import(elem *e);
@@ -186,6 +188,15 @@ struct MsCoffObj : Obj
         unsigned targseg, int rtype, int val);
 //    static void addrel(int seg, targ_size_t offset, unsigned type,
 //                                        unsigned symidx, targ_size_t val);
+
+    static int seg_pdata();
+    static int seg_xdata();
+    static int seg_pdata_comdat(Symbol *sfunc);
+    static int seg_xdata_comdat(Symbol *sfunc);
+
+    static int seg_debugS();
+    VIRTUAL int seg_debugT();
+    static int seg_debugS_comdat(Symbol *sfunc);
 };
 
 #undef VIRTUAL

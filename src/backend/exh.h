@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -42,6 +41,9 @@ symbol *except_gensym();
 symbol *except_gentables();
 void except_fillInEHTable(symbol *s);
 void  except_reset();
+
+/* pdata.c */
+void win64_pdata(Symbol *sf);
 
 #endif
 

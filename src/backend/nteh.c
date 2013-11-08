@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -316,7 +315,7 @@ code *nteh_prolog()
         /* An sindex value of -2 is a magic value that tells the
          * stack unwinder to skip this frame.
          */
-        assert(config.exe & (EX_LINUX | EX_LINUX64 | EX_OSX | EX_OSX64 | EX_FREEBSD | EX_FREEBSD64 | EX_SOLARIS | EX_SOLARIS64));
+        assert(config.exe & (EX_LINUX | EX_LINUX64 | EX_OSX | EX_OSX64 | EX_FREEBSD | EX_FREEBSD64 | EX_SOLARIS | EX_SOLARIS64 | EX_OPENBSD | EX_OPENBSD64));
         cs.Iop = 0x68;
         cs.Iflags = 0;
         cs.Irex = 0;

@@ -72,9 +72,7 @@ struct DeleteDeclaration;
 struct HdrGenState;
 struct OverloadSet;
 struct AA;
-#if TARGET_NET
-struct PragmaScope;
-#endif
+struct JsonOut;
 #ifdef IN_GCC
 union tree_node;
 typedef union tree_node TYPE;
@@ -96,6 +94,9 @@ enum PROT
     PROTexport,
 };
 
+// this is used for printing the protection in json, traits, docs, etc.
+extern const char* Pprotectionnames[];
+
 /* State of symbol in winding its way through the passes of the compiler
  */
 enum PASS
@@ -114,7 +115,6 @@ typedef int (*Dsymbol_apply_ft_t)(Dsymbol *, void *);
 struct Dsymbol : Object
 {
     Identifier *ident;
-    Identifier *c_ident;
     Dsymbol *parent;
     Symbol *csym;               // symbol for code generator
     Symbol *isym;               // import version of csym
@@ -122,15 +122,21 @@ struct Dsymbol : Object
     Loc loc;                    // where defined
     Scope *scope;               // !=NULL means context to use for semantic()
     bool errors;                // this symbol failed to pass semantic()
+    char *depmsg;               // customized deprecation message
+    Expressions *userAttributes;        // user defined attributes from UserAttributeDeclaration
+    UnitTestDeclaration *unittest; // !=NULL means there's a unittest associated with this symbol
 
     Dsymbol();
     Dsymbol(Identifier *);
     char *toChars();
+    Loc& getLoc();
     char *locToChars();
     int equals(Object *o);
     int isAnonymous();
     void error(Loc loc, const char *format, ...);
     void error(const char *format, ...);
+    void deprecation(Loc loc, const char *format, ...);
+    void deprecation(const char *format, ...);
     void checkDeprecated(Loc loc, Scope *sc);
     Module *getModule();
     Module *getAccessModule();
@@ -158,22 +164,23 @@ struct Dsymbol : Object
     virtual void inlineScan();
     virtual Dsymbol *search(Loc loc, Identifier *ident, int flags);
     Dsymbol *search_correct(Identifier *id);
-    Dsymbol *searchX(Loc loc, Scope *sc, Identifier *id);
+    Dsymbol *searchX(Loc loc, Scope *sc, Object *id);
     virtual int overloadInsert(Dsymbol *s);
-    char *toHChars();
     virtual void toHBuffer(OutBuffer *buf, HdrGenState *hgs);
     virtual void toCBuffer(OutBuffer *buf, HdrGenState *hgs);
-    virtual void toDocBuffer(OutBuffer *buf);
-    virtual void toJsonBuffer(OutBuffer *buf);
+    virtual void toDocBuffer(OutBuffer *buf, Scope *sc);
+    virtual void toJson(JsonOut *json);
+    virtual void jsonProperties(JsonOut *json);
     virtual unsigned size(Loc loc);
     virtual int isforwardRef();
     virtual void defineRef(Dsymbol *s);
     virtual AggregateDeclaration *isThis();     // is a 'this' required to access the member
     AggregateDeclaration *isAggregateMember();  // are we a member of an aggregate?
+    AggregateDeclaration *isAggregateMember2(); // are we a member of an aggregate?
     ClassDeclaration *isClassMember();          // are we a member of a class?
     virtual int isExport();                     // is Dsymbol exported?
     virtual int isImportedSymbol();             // is Dsymbol imported?
-    virtual int isDeprecated();                 // is Dsymbol deprecated?
+    virtual bool isDeprecated();                // is Dsymbol deprecated?
 #if DMDV2
     virtual int isOverloadable();
     virtual int hasOverloads();
@@ -181,7 +188,7 @@ struct Dsymbol : Object
     virtual LabelDsymbol *isLabel();            // is this a LabelDsymbol?
     virtual AggregateDeclaration *isMember();   // is this symbol a member of an AggregateDeclaration?
     virtual Type *getType();                    // is this a type?
-    virtual char *mangle();
+    virtual const char *mangle(bool isv = false);
     virtual int needThis();                     // need a 'this' pointer?
     virtual enum PROT prot();
     virtual Dsymbol *syntaxCopy(Dsymbol *s);    // copy only syntax trees
@@ -248,9 +255,6 @@ struct Dsymbol : Object
     virtual SymbolDeclaration *isSymbolDeclaration() { return NULL; }
     virtual AttribDeclaration *isAttribDeclaration() { return NULL; }
     virtual OverloadSet *isOverloadSet() { return NULL; }
-#if TARGET_NET
-    virtual PragmaScope* isPragmaScope() { return NULL; }
-#endif
 };
 
 // Dsymbol that generates a scope
@@ -324,7 +328,7 @@ struct OverloadSet : Dsymbol
 {
     Dsymbols a;         // array of Dsymbols
 
-    OverloadSet();
+    OverloadSet(Identifier *ident);
     void push(Dsymbol *s);
     OverloadSet *isOverloadSet() { return this; }
     const char *kind();

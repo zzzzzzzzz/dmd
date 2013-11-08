@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -82,15 +81,6 @@ void code_term(void);
 
 #define code_next(c)    ((c)->next)
 
-/**********************************
- * Set value in regimmed for reg.
- * NOTE: For 16 bit generator, this is always a (targ_short) sign-extended
- *      value.
- */
-
-#define regimmed_set(reg,e) \
-        (regcon.immed.value[reg] = (e),regcon.immed.mval |= 1 << (reg))
-
 extern con_t regcon;
 
 /****************************
@@ -134,6 +124,22 @@ struct REGSAVE
 }
 extern REGSAVE regsave;
 
+/************************************
+ * Local sections on the stack
+ */
+struct LocalSection
+{
+    targ_size_t offset;         // offset of section from frame pointer
+    targ_size_t size;           // size of section
+    int alignment;              // alignment size
+
+    void init()                 // initialize
+    {   offset = 0;
+        size = 0;
+        alignment = 0;
+    }
+};
+
 /*******************************
  * As we generate code, collect information about
  * what parts of NT exception handling we need.
@@ -173,13 +179,15 @@ extern  regm_t FLOATREGS2;
 extern  regm_t DOUBLEREGS;
 extern  const char datafl[],stackfl[],segfl[],flinsymtab[];
 extern  char needframe,usedalloca,gotref;
-extern  targ_size_t localsize,Toff,Poff,Aoff,
-        Poffset,funcoffset,
-        framehandleroffset,
-        Aoffset,Toffset,EEoffset;
-extern  int Aalign;
+extern  targ_size_t localsize,
+        funcoffset,
+        framehandleroffset;
 extern  segidx_t cseg;
 extern  int STACKALIGN;
+extern  LocalSection Para;
+extern  LocalSection Fast;
+extern  LocalSection Auto;
+extern  LocalSection EEStack;
 #if TARGET_OSX
 extern  targ_size_t localgotoffset;
 #endif
@@ -196,12 +204,15 @@ extern  unsigned cstop;
 #if TX86
 extern  bool floatreg;
 #endif
+extern  targ_size_t prolog_allocoffset;
+extern  targ_size_t startoffset;
 extern  targ_size_t retoffset;
+extern  targ_size_t retsize;
 extern  unsigned stackpush;
 extern  int stackchanged;
 extern  int refparam;
 extern  int reflocal;
-extern  char anyiasm;
+extern  bool anyiasm;
 extern  char calledafunc;
 extern  code *(*cdxxx[])(elem *,regm_t *);
 
@@ -230,7 +241,7 @@ code *cse_flush(int);
 bool cse_simple(code *c, elem *e);
 code* gen_testcse(code *c, unsigned sz, targ_uns i);
 code* gen_loadcse(code *c, unsigned reg, targ_uns i);
-void cssave (elem *e , regm_t regm , unsigned opsflag );
+bool cssave (elem *e , regm_t regm , unsigned opsflag );
 bool evalinregister (elem *e );
 regm_t getscratch();
 code *codelem (elem *e , regm_t *pretregs , bool constflag );
@@ -248,8 +259,8 @@ unsigned buildModregrm(int mod, int reg, int rm);
 void andregcon (con_t *pregconsave);
 void genEEcode();
 code *docommas (elem **pe );
-void gensaverestore(regm_t, code **, code **);
-void gensaverestore2(regm_t regm,code **csave,code **crestore);
+unsigned gensaverestore(regm_t, code **, code **);
+unsigned gensaverestore2(regm_t regm,code **csave,code **crestore);
 code *genstackclean(code *c,unsigned numpara,regm_t keepmsk);
 code *logexp (elem *e , int jcond , unsigned fltarg , code *targ );
 unsigned getaddrmode (regm_t idxregs );
@@ -308,7 +319,6 @@ cd_t cdnullcheck;
 cd_t cdclassinit;
 
 /* cod3.c */
-extern int BPoff;
 
 int cod3_EA(code *c);
 regm_t cod3_useBP();
@@ -361,7 +371,7 @@ int code_match(code *c1,code *c2);
 unsigned calcblksize (code *c);
 unsigned calccodsize(code *c);
 unsigned codout (code *c );
-void addtofixlist (symbol *s , targ_size_t soffset , int seg , targ_size_t val , int flags );
+size_t addtofixlist (symbol *s , targ_size_t soffset , int seg , targ_size_t val , int flags );
 void searchfixlist (symbol *s );
 void outfixlist (void );
 void code_hydrate(code **pc);
@@ -374,7 +384,7 @@ extern targ_size_t CSoff;       // offset of common sub expressions
 extern targ_size_t NDPoff;      // offset of saved 8087 registers
 extern int BPoff;                      // offset from BP
 extern int EBPtoESP;            // add to EBP offset to get ESP offset
-extern int AAoff;               // offset of alloca temporary
+extern int AllocaOff;               // offset of alloca temporary
 
 code* prolog_ifunc(tym_t* tyf);
 code* prolog_ifunc2(tym_t tyf, tym_t tym, bool pushds);
@@ -383,6 +393,7 @@ code* prolog_frame(unsigned farfunc, unsigned* xlocalsize, bool* enter);
 code* prolog_frameadj(tym_t tyf, unsigned xlocalsize, bool enter, bool* pushalloc);
 code* prolog_frameadj2(tym_t tyf, unsigned xlocalsize, bool* pushalloc);
 code* prolog_setupalloca();
+code* prolog_saveregs(code *c, regm_t topush);
 code* prolog_trace(bool farfunc, unsigned* regsaved);
 code* prolog_gen_win64_varargs();
 code* prolog_genvarargs(symbol* sv, regm_t* namedargs);
@@ -410,6 +421,7 @@ cd_t cdsetjmp;
 cd_t cdvoid;
 cd_t cdhalt;
 cd_t cdfar16;
+cd_t cdbtst;
 cd_t cdbt;
 cd_t cdbscan;
 cd_t cdpair;
@@ -420,15 +432,17 @@ void cod5_prol_epi();
 void cod5_noprol();
 
 /* cgxmm.c */
+bool isXMMstore(unsigned op);
 code *movxmmconst(unsigned reg, unsigned sz, targ_size_t value, regm_t flags);
 code *orthxmm(elem *e, regm_t *pretregs);
-code *xmmeq(elem *e, regm_t *pretregs);
+code *xmmeq(elem *e, unsigned op, elem *e1, elem *e2,regm_t *pretregs);
 code *xmmcnvt(elem *e,regm_t *pretregs);
 code *xmmopass(elem *e, regm_t *pretregs);
 code *xmmneg(elem *e, regm_t *pretregs);
 unsigned xmmload(tym_t tym);
 unsigned xmmstore(tym_t tym);
 code *cdvector(elem *e, regm_t *pretregs);
+code *cdvecsto(elem *e, regm_t *pretregs);
 
 /* cg87.c */
 void note87(elem *e, unsigned offset, int i);
@@ -466,6 +480,8 @@ extern int stackused;
 #endif
 code *cdconvt87(elem *e, regm_t *pretregs);
 code *cload87(elem *e, regm_t *pretregs);
+code *cdd_u64(elem *e, regm_t *pretregs);
+code *cdd_u32(elem *e, regm_t *pretregs);
 
 #ifdef DEBUG
 #define pop87() pop87(__LINE__,__FILE__)
@@ -574,6 +590,7 @@ struct seg_data
     int                  SDrelcnt;      // number of relocations added
     IDXSEC               SDshtidxout;   // final section header table index
     Symbol              *SDsym;         // if !=NULL, comdat symbol
+    segidx_t             SDassocseg;    // for COMDATs, if !=0, this is the "associated" segment
 #endif
 
     unsigned            SDaranges_offset;       // if !=0, offset in .debug_aranges
@@ -638,6 +655,24 @@ inline regm_t Symbol::Spregm()
     return mask[Spreg] | (Spreg2 == NOREG ? 0 : mask[Spreg2]);
 }
 
+
+/**********************************
+ * Set value in regimmed for reg.
+ * NOTE: For 16 bit generator, this is always a (targ_short) sign-extended
+ *      value.
+ */
+
+#if 1
+inline void regimmed_set(int reg, targ_size_t e)
+{
+    regcon.immed.value[reg] = e;
+    regcon.immed.mval |= 1 << (reg);
+    //printf("regimmed_set %s %d\n", regm_str(mask[reg]), (int)e);
+}
+#else
+#define regimmed_set(reg,e) \
+        (regcon.immed.value[reg] = (e),regcon.immed.mval |= 1 << (reg))
+#endif
 
 #if __cplusplus && TX86
 }

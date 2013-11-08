@@ -5,8 +5,7 @@
 // Written by Walter Bright
 /*
  * This source file is made available for personal use
- * only. The license is in /dmd/src/dmd/backendlicense.txt
- * or /dm/src/dmd/backendlicense.txt
+ * only. The license is in backendlicense.txt
  * For any other uses, please contact Digital Mars.
  */
 
@@ -41,10 +40,11 @@ int _binary[] =
          OPnlt,OPnle,OPord,OPnlg,OPnleg,OPnule,OPnul,OPnuge,OPnug,OPnue,
          OPinfo,OParray,OPfield,OPnewarray,OPmultinewarray,OPinstanceof,OPfinalinstanceof,
          OPcheckcast,OPpair,OPrpair,
-         OPbt,OPbtc,OPbtr,OPbts,OPror,OProl,
+         OPbt,OPbtc,OPbtr,OPbts,OPror,OProl,OPbtst,
          OPremquo,
 #if TX86
          OPoutp,OPscale,OPyl2x,OPyl2xp1,
+         OPvecsto,
 #endif
         };
 int _unary[] =
@@ -80,7 +80,7 @@ int _assoc[] = {OPadd,OPand,OPor,OPxor,OPmul};
 int _assign[] =
         {OPstreq,OPeq,OPaddass,OPminass,OPmulass,OPdivass,OPmodass,
          OPshrass,OPashrass,OPshlass,OPandass,OPxorass,OPorass,OPpostinc,OPpostdec,
-         OPnegass,
+         OPnegass,OPvecsto,
         };
 int _wid[] =
         {OPadd,OPmin,OPand,OPor,OPxor,OPcom,OPneg,OPmul,OPaddass,OPnegass,
@@ -102,6 +102,7 @@ int _rel[] = {OPeqeq,OPne,OPle,OPlt,OPgt,OPge,
 int _logical[] = {OPeqeq,OPne,OPle,OPlt,OPgt,OPge,OPandand,OPoror,OPnot,OPbool,
          OPunord,OPlg,OPleg,OPule,OPul,OPuge,OPug,OPue,OPngt,OPnge,
          OPnlt,OPnle,OPord,OPnlg,OPnleg,OPnule,OPnul,OPnuge,OPnug,OPnue,
+         OPbt,OPbtst,
         };
 int _def[] = {OPstreq,OPeq,OPaddass,OPminass,OPmulass,OPdivass,OPmodass,
                 OPshrass,OPashrass,OPshlass,OPandass,OPxorass,OPorass,
@@ -109,6 +110,7 @@ int _def[] = {OPstreq,OPeq,OPaddass,OPminass,OPmulass,OPdivass,OPmodass,
                 OPcall,OPucall,OPasm,OPstrcpy,OPmemcpy,OPmemset,OPstrcat,
                 OPnegass,OPnewarray,OPmultinewarray,
                 OPbtc,OPbtr,OPbts,
+                OPvecsto,
              };
 int _sideff[] = {OPasm,OPucall,OPstrcpy,OPmemcpy,OPmemset,OPstrcat,
                 OPcall,OPeq,OPstreq,OPpostinc,OPpostdec,
@@ -119,13 +121,14 @@ int _sideff[] = {OPasm,OPucall,OPstrcpy,OPmemcpy,OPmemset,OPstrcat,
                 OPbtc,OPbtr,OPbts,
                 OPhalt,OPdctor,OPddtor,
 #if TX86
-                OPinp,OPoutp,
+                OPinp,OPoutp,OPvecsto,
 #endif
                 };
 int _rtol[] = {OPeq,OPstreq,OPstrcpy,OPmemcpy,OPpostinc,OPpostdec,OPaddass,
                 OPminass,OPmulass,OPdivass,OPmodass,OPandass,
                 OPorass,OPxorass,OPshlass,OPshrass,OPashrass,
                 OPcall,OPcallns,OPinfo,OPmemset,
+                OPvecsto,
                 };
 int _ae[] = {OPvar,OPconst,OPrelconst,OPneg,
                 OPabs,OPrndtol,OPrint,
@@ -143,7 +146,7 @@ int _ae[] = {OPvar,OPconst,OPrelconst,OPneg,
                 OP128_64,OPs64_128,OPu64_128,
                 OPsizeof,OParray,OPfield,OPinstanceof,OPfinalinstanceof,OPcheckcast,OParraylength,
                 OPcallns,OPucallns,OPnullcheck,OPpair,OPrpair,
-                OPbsf,OPbsr,OPbt,OPbswap,OPb_8,
+                OPbsf,OPbsr,OPbt,OPbswap,OPb_8,OPbtst,
                 OPgot,OPremquo,
                 OPnullptr,
                 OProl,OPror,
@@ -173,7 +176,7 @@ int _exp[] = {OPvar,OPconst,OPrelconst,OPneg,OPabs,OPrndtol,OPrint,
                 OPcall,OPcallns,OPeq,OPstreq,OPpostinc,OPpostdec,
                 OPaddass,OPminass,OPmulass,OPdivass,OPmodass,OPandass,
                 OPorass,OPxorass,OPshlass,OPshrass,OPashrass,OPoror,OPandand,OPcond,
-                OPbsf,OPbsr,OPbt,OPbtc,OPbtr,OPbts,OPbswap,
+                OPbsf,OPbsr,OPbt,OPbtc,OPbtr,OPbts,OPbswap,OPbtst,
                 OProl,OPror,OPvector,
                 OPpair,OPrpair,OPframeptr,OPgot,OPremquo,
                 OPcolon,OPcolon2,OPasm,OPstrcpy,OPmemcpy,OPmemset,OPstrcat,OPnegass,
@@ -594,8 +597,8 @@ void dotab()
         case OPu8_16:   X("u8_16",      elbyteint, cdbyteint);
         case OPs8_16:   X("s8_16",      elbyteint, cdbyteint);
         case OP16_8:    X("16_8",       ellngsht,cdlngsht);
-        case OPu32_64:  X("u32_64",     evalu8, cdshtlng);
-        case OPs32_64:  X("s32_64",     evalu8, cdshtlng);
+        case OPu32_64:  X("u32_64",     el32_64, cdshtlng);
+        case OPs32_64:  X("s32_64",     el32_64, cdshtlng);
         case OP64_32:   X("64_32",      el64_32, cdlngsht);
         case OPu64_128: X("u64_128",    evalu8, cdshtlng);
         case OPs64_128: X("s64_128",    evalu8, cdshtlng);
@@ -634,6 +637,7 @@ void dotab()
 
         case OPbsf:     X("bsf",        elzot,  cdbscan);
         case OPbsr:     X("bsr",        elzot,  cdbscan);
+        case OPbtst:    X("btst",       elzot,  cdbtst);
         case OPbt:      X("bt",         elzot,  cdbt);
         case OPbtc:     X("btc",        elzot,  cdbt);
         case OPbtr:     X("btr",        elzot,  cdbt);
@@ -641,6 +645,7 @@ void dotab()
 
         case OPbswap:   X("bswap",      evalu8, cdbswap);
         case OPvector:  X("vector",     elzot,  cdvector);
+        case OPvecsto:  X("vecsto",     elzot,  cdvecsto);
 
         default:
                 printf("opcode hole x%x\n",i);
@@ -662,7 +667,7 @@ void dotab()
   fclose(f);
 
   f = fopen("elxxx.c","w");
-  fprintf(f,"static elem *(*elxxx[OPMAX]) (elem *) = \n\t{\n");
+  fprintf(f,"static elem *(*elxxx[OPMAX]) (elem *, goal_t) = \n\t{\n");
   for (i = 0; i < OPMAX - 1; i++)
         fprintf(f,"\t%s,\n",elxxx[i]);
   fprintf(f,"\t%s\n\t};\n",elxxx[i]);
@@ -678,7 +683,7 @@ void fltables()
         char flinsymtab[FLMAX];
 
         static char indatafl[] =        /* is FLxxxx a data type?       */
-        { FLdata,FLudata,FLreg,FLpseudo,FLauto,FLpara,FLextern,FLtmp,
+        { FLdata,FLudata,FLreg,FLpseudo,FLauto,FLfast,FLpara,FLextern,
           FLcs,FLfltreg,FLallocatmp,FLdatseg,FLtlsdata,FLbprel,
           FLstack,FLregsave,
 #if TX86
@@ -690,14 +695,14 @@ void fltables()
 #endif
 
         static char instackfl[] =       /* is FLxxxx a stack data type? */
-        { FLauto,FLpara,FLtmp,FLcs,FLfltreg,FLallocatmp,FLbprel,FLstack,FLregsave,
+        { FLauto,FLfast,FLpara,FLcs,FLfltreg,FLallocatmp,FLbprel,FLstack,FLregsave,
 #if TX86
           FLndp,
 #endif
         };
 
         static char inflinsymtab[] =    /* is FLxxxx in the symbol table? */
-        { FLdata,FLudata,FLreg,FLpseudo,FLauto,FLpara,FLextern,FLtmp,FLfunc,
+        { FLdata,FLudata,FLreg,FLpseudo,FLauto,FLfast,FLpara,FLextern,FLfunc,
           FLtlsdata,FLbprel,FLstack };
 #if TARGET_SEGMENTED
         static char inflinsymtab_s[] = { FLfardata,FLcsdata, };
@@ -759,11 +764,11 @@ void fltables()
                 case FLreg:     segfl[i] = -1;  break;
                 case FLpseudo:  segfl[i] = -1;  break;
                 case FLauto:    segfl[i] = SS;  break;
+                case FLfast:    segfl[i] = SS;  break;
                 case FLstack:   segfl[i] = SS;  break;
                 case FLbprel:   segfl[i] = SS;  break;
                 case FLpara:    segfl[i] = SS;  break;
                 case FLextern:  segfl[i] = DS;  break;
-                case FLtmp:     segfl[i] = SS;  break;
                 case FLcode:    segfl[i] = CS;  break;
                 case FLblock:   segfl[i] = CS;  break;
                 case FLblockoff: segfl[i] = CS; break;
@@ -919,11 +924,11 @@ void dotytab()
 
 "long",         TYlong,         TYulong,   TYlong,      LONGSIZE,  0x82,0x12,
 "unsigned long",TYulong,        TYulong,   TYlong,      LONGSIZE,  0x86,0x22,
-"dchar",        TYdchar,        TYdchar,   TYlong,      4,         0x86,0x78,
+"dchar",        TYdchar,        TYdchar,   TYlong,      4,         0x86,0x22,
 "long long",    TYllong,        TYullong,  TYllong,     LLONGSIZE, 0x82,0x13,
 "uns long long",TYullong,       TYullong,  TYllong,     LLONGSIZE, 0x86,0x23,
-"cent",         TYcent,         TYucent,   TYcent,      16,        0x82,0x13,
-"ucent",        TYucent,        TYucent,   TYcent,      16,        0x86,0x23,
+"cent",         TYcent,         TYucent,   TYcent,      16,        0x82,0x603,
+"ucent",        TYucent,        TYucent,   TYcent,      16,        0x86,0x603,
 "float",        TYfloat,        TYfloat,   TYfloat,     FLOATSIZE, 0x88,0x40,
 "double",       TYdouble,       TYdouble,  TYdouble,    DOUBLESIZE,0x89,0x41,
 "double alias", TYdouble_alias, TYdouble_alias,  TYdouble_alias,8, 0x89,0x41,
