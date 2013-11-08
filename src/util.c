@@ -136,7 +136,7 @@ void util_progress(int linnum)
 
 #endif
 
-#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || _MSC_VER
+#if linux || __APPLE__ || __FreeBSD__ || __OpenBSD__ || __sun || _MSC_VER || __HAIKU__
 void util_progress()
 {
 }
