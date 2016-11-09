@@ -15,6 +15,11 @@ ifeq (,$(OS))
   ifeq (OpenBSD,$(uname_S))
     OS:=openbsd
   endif
+  ifeq (Haiku,$(uname_S))
+    # I know its ugly
+    OS:=haiku
+    MODEL:=32
+  endif
   ifeq (Solaris,$(uname_S))
     OS:=solaris
   endif

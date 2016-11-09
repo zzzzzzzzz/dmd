@@ -38,6 +38,14 @@ ifneq ($(HOST_CC),)
 endif
 CXX=$(HOST_CXX)
 AR=ar
+## =======
+#LDFLAGS=-lm -lstdc++ -lpthread
+LDFLAGS=-lroot -lstdc++
+##
+## HOST_CC=g++-x86
+HOST_CC=g++
+CC=$(HOST_CC) $(MODEL_FLAG)
+## >>>>> merge-haiku-support
 GIT=git
 
 # determine whether CXX is gcc or clang based

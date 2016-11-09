@@ -8,6 +8,7 @@ fail_compilation/fail10102.d(51): Error: field S.m must be initialized because i
 ---
 */
 
+// REQUIRED_ARGS: -m32
 struct NotNull(T)
 {
     T p;
